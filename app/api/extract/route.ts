@@ -8,6 +8,7 @@ import {
   sameOrigin,
   sanitizeName,
 } from "../../../lib/http";
+import { clientIp, releaseExtractSlot, takeExtractSlot } from "../../../lib/rate-limit";
 import type { UploadedFile } from "../../../lib/readers";
 
 export const runtime = "nodejs";
@@ -23,6 +24,22 @@ export async function POST(request: Request) {
     return json({ error: "잘못된 요청 출처입니다." }, 403);
   }
 
+  const ip = clientIp(request);
+  const slot = takeExtractSlot(ip);
+  if (!slot.ok) {
+    return json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요." }, 429, {
+      "retry-after": String(slot.retryAfterSec),
+    });
+  }
+
+  try {
+    return await runExtract(request);
+  } finally {
+    releaseExtractSlot(ip);
+  }
+}
+
+async function runExtract(request: Request): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
