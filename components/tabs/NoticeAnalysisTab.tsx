@@ -55,7 +55,7 @@ function checkTags(result: Extracted["결과"]): string[] {
 }
 
 export function NoticeAnalysisTab() {
-  const { notices, setNotices, selectedNotice, setSelectedNotice } = useDashboard();
+  const { notices, setNotices, selectedNotice, setSelectedNotice, csrf, refreshCsrf } = useDashboard();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -102,7 +102,13 @@ export function NoticeAnalysisTab() {
     for (const f of files) body.append("files", f);
     try {
       await new Promise((r) => window.setTimeout(r, 900));
-      const res = await fetch("/api/extract", { method: "POST", body, credentials: "same-origin" });
+      const token = csrf || (await refreshCsrf());
+      const res = await fetch("/api/extract", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+        headers: token ? { "x-extract-csrf": token } : undefined,
+      });
       let data: Extracted & { error?: string };
       try {
         data = (await res.json()) as Extracted & { error?: string };
@@ -125,7 +131,7 @@ export function NoticeAnalysisTab() {
     } finally {
       setBusy(false);
     }
-  }, [files, setNotices, setSelectedNotice]);
+  }, [files, setNotices, setSelectedNotice, csrf, refreshCsrf]);
 
   const loadSample = useCallback(() => {
     const extracted = asExtracted(sampleExtract as Extracted, "샘플");

@@ -8,6 +8,7 @@ import {
   sameOrigin,
   sanitizeName,
 } from "../../../lib/http";
+import { extractCsrfOk } from "../../../lib/csrf";
 import { clientIp, releaseExtractSlot, takeExtractSlot } from "../../../lib/rate-limit";
 import type { UploadedFile } from "../../../lib/readers";
 
@@ -22,6 +23,9 @@ export async function POST(request: Request) {
   }
   if (!sameOrigin(request)) {
     return json({ error: "잘못된 요청 출처입니다." }, 403);
+  }
+  if (!extractCsrfOk(request)) {
+    return json({ error: "세션이 만료되었거나 잘못된 요청입니다. 페이지를 새로고침해 주세요." }, 403);
   }
 
   const ip = clientIp(request);

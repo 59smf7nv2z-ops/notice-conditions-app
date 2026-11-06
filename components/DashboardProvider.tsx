@@ -21,6 +21,8 @@ type Ctx = {
   clearBuildings: () => void;
   mock: boolean;
   simulated: boolean;
+  csrf: string;
+  refreshCsrf: () => Promise<string>;
 };
 
 const DashboardContext = createContext<Ctx | null>(null);
@@ -32,6 +34,18 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [buildings, setBuildings] = useState<BuildingRecord[]>([]);
   const [mock, setMock] = useState(true);
   const [simulated, setSimulated] = useState(false);
+  const [csrf, setCsrf] = useState("");
+
+  const refreshCsrf = useCallback(async () => {
+    const r = await fetch("/api/status", { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) throw new Error("status");
+    const s = (await r.json()) as { mock: boolean; simulated: boolean; csrf?: string };
+    setMock(Boolean(s.mock));
+    setSimulated(Boolean(s.simulated));
+    const token = typeof s.csrf === "string" ? s.csrf : "";
+    setCsrf(token);
+    return token;
+  }, []);
 
   useEffect(() => {
     try {
@@ -42,17 +56,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* ignore */
     }
-    fetch("/api/status", { cache: "no-store" })
-      .then(async (r) => {
-        if (!r.ok) throw new Error("status");
-        return r.json();
-      })
-      .then((s: { mock: boolean; simulated: boolean }) => {
-        setMock(Boolean(s.mock));
-        setSimulated(Boolean(s.simulated));
-      })
-      .catch(() => undefined);
-  }, []);
+    void refreshCsrf().catch(() => undefined);
+  }, [refreshCsrf]);
 
   useEffect(() => {
     try {
@@ -105,8 +110,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       clearBuildings: () => setBuildings([]),
       mock,
       simulated,
+      csrf,
+      refreshCsrf,
     }),
-    [tab, notices, selectedNotice, notice, buildings, addBuilding, mock, simulated],
+    [tab, notices, selectedNotice, notice, buildings, addBuilding, mock, simulated, csrf, refreshCsrf],
   );
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

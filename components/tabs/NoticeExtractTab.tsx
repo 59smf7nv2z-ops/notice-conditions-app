@@ -43,7 +43,12 @@ export function NoticeExtractTab() {
         const body = new FormData();
         body.set("name", draft.name);
         for (const f of draft.files) body.append("files", f);
-        const res = await fetch("/api/extract", { method: "POST", body, credentials: "same-origin" });
+        const res = await fetch("/api/extract", {
+          method: "POST",
+          body,
+          credentials: "same-origin",
+          headers: { "x-extract-csrf": (await fetch("/api/status", { cache: "no-store", credentials: "same-origin" }).then((r) => r.json()) as { csrf?: string }).csrf || "" },
+        });
         let data: Extracted & { error?: string };
         try {
           data = (await res.json()) as Extracted & { error?: string };
