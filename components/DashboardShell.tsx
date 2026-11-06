@@ -3,7 +3,7 @@
 import { TABS } from "@/lib/types";
 import { useDashboard } from "./DashboardProvider";
 import { NoticeAnalysisTab } from "./tabs/NoticeAnalysisTab";
-import { BuildingCompareTab } from "./tabs/BuildingCompareTab";
+import { BuildingMatchTab } from "./tabs/BuildingMatchTab";
 import { GuideReportTab } from "./tabs/GuideReportTab";
 import { MapPlaceholderTab } from "./tabs/MapPlaceholderTab";
 
@@ -65,7 +65,7 @@ export function DashboardShell() {
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:py-8">
         {tab === "extract" ? <NoticeAnalysisTab /> : null}
-        {tab === "compare" ? <BuildingCompareTab /> : null}
+        {tab === "compare" ? <BuildingMatchTab /> : null}
         {tab === "report" ? <GuideReportTab /> : null}
         {tab === "map" ? <MapPlaceholderTab /> : null}
       </main>

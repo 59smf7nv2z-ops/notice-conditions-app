@@ -25,8 +25,10 @@ export type BuildingRecord = {
   id: string;
   address: string;
   ownerHint: string;
+  approvalDate?: string;
   ageYears: string;
   floors: string;
+  basementFloors?: string;
   floorArea: string;
   use: string;
   structure: string;

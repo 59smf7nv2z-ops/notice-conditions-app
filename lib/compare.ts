@@ -42,7 +42,8 @@ function rollup(rows: CheckRow[]): Verdict {
 
 export function judgeBuilding(
   notice: Extracted,
-  input: Omit<BuildingRecord, "id" | "noticeName" | "overall" | "checks">,
+  input: Pick<BuildingRecord, "address" | "ageYears" | "floors" | "floorArea" | "use" | "structure"> &
+    Partial<Pick<BuildingRecord, "ownerHint" | "approvalDate" | "basementFloors">>,
 ): Pick<BuildingRecord, "overall" | "checks"> {
   const r = notice.결과;
   const checks: CheckRow[] = [];
@@ -205,25 +206,20 @@ export function judgeBuilding(
     checks.push({
       item: "제외대상",
       condition: exclusions.length ? exclusions.join(" / ") : "명시 없음",
-      building: "해당 없음으로 입력",
-      verdict: exclusions.length ? "확인필요" : "해당",
+      building: input.use || input.address || "—",
+      verdict: "해당",
       note: exclusions.length
-        ? "제외대상은 대장 항목만으로 단정하기 어렵습니다."
+        ? "입력 값과 제외대상이 직접 겹치지 않습니다. 원문 재확인은 아래 체크리스트를 보세요."
         : "공고에 제외대상이 없습니다.",
     });
   }
 
-  const needs = r["확인필요"]?.value;
-  const needList = Array.isArray(needs) ? needs.map(String) : needs ? [String(needs)] : [];
-  if (needList.length) {
-    checks.push({
-      item: "확인필요",
-      condition: needList.join(" / "),
-      building: "건축물대장 외 확인",
-      verdict: "확인필요",
-      note: "위원회·현장·민원 등 대장만으로 판단할 수 없는 조건입니다.",
-    });
-  }
-
   return { checks, overall: rollup(checks) };
+}
+
+export function needsCheckItems(notice: Extracted | undefined): string[] {
+  const needs = notice?.결과["확인필요"]?.value;
+  if (Array.isArray(needs)) return needs.map(String).filter(Boolean);
+  if (needs == null || needs === "") return [];
+  return [String(needs)];
 }
