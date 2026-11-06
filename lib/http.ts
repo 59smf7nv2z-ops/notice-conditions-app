@@ -20,38 +20,55 @@ function hostOf(urlLike: string): string | null {
   }
 }
 
-function isInternalHost(host: string): boolean {
-  return host === "loopback" || host === "0.0.0.0" || !host.includes(".");
-}
-
 function headerHost(request: Request, name: string): string {
   const raw = request.headers.get(name);
   if (!raw) return "";
   return canonHost(raw.split(",")[0].trim());
 }
 
-/** Public Host / X-Forwarded-Host first. request.url is often an internal listener. */
-function publicHost(request: Request): string {
-  const header = headerHost(request, "host");
-  const forwarded = headerHost(request, "x-forwarded-host");
-  const urlHost = canonHost(new URL(request.url).host);
-  if (header && !isInternalHost(header)) return header;
-  if (forwarded && !isInternalHost(forwarded)) return forwarded;
-  if (urlHost && !isInternalHost(urlHost)) return urlHost;
-  return header || forwarded || urlHost;
+function forwardedRfcHost(request: Request): string {
+  const raw = request.headers.get("forwarded");
+  if (!raw) return "";
+  const match = raw.match(/(?:^|[;,])\s*host="?([^;,"\s]+)"?/i);
+  return match ? canonHost(match[1]) : "";
 }
 
-/** POST extract: Origin must match the public site host. Missing Origin fails. */
+function envHosts(): string[] {
+  const raw = [
+    process.env["VERCEL_PROJECT_PRODUCTION_URL"],
+    process.env["VERCEL_URL"],
+  ];
+  const hosts: string[] = [];
+  for (const value of raw) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    const host = hostOf(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+    if (host) hosts.push(host);
+  }
+  return hosts;
+}
+
+function trustedHosts(request: Request): Set<string> {
+  return new Set(
+    [
+      headerHost(request, "host"),
+      headerHost(request, "x-forwarded-host"),
+      forwardedRfcHost(request),
+      canonHost(new URL(request.url).host),
+      ...envHosts(),
+      // Cursor Apps public URL is not always Host/request.url on the function.
+      "notice-conditions.apps.grok.bot",
+    ].filter(Boolean),
+  );
+}
+
+/** POST extract: Origin must match this app. Missing Origin fails. */
 export function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
   const originHost = hostOf(origin);
   if (!originHost) return false;
-  if (originHost !== publicHost(request)) return false;
-
-  const site = (request.headers.get("sec-fetch-site") || "").toLowerCase();
-  if (site === "cross-site") return false;
-  return true;
+  return trustedHosts(request).has(originHost);
 }
 
 /** Bracket env read so Next.js cannot inline an empty key at build time. */
