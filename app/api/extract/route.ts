@@ -1,4 +1,4 @@
-import { requireIdentity } from "../../../cursor/identity";
+import { getIdentity } from "../../../cursor/identity";
 import { extractNotice } from "../../../lib/extract";
 import {
   json,
@@ -15,9 +15,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
-  const identity = await requireIdentity(request);
-  if (identity instanceof Response) return identity;
-  if (identity.kind === "key" && identity.appVisibility === "public") {
+  const identity = await getIdentity(request);
+  if (identity.verified && identity.kind === "key" && identity.appVisibility === "public") {
     return json({ error: "이 API는 공개 호출을 받지 않습니다." }, 403);
   }
   if (!sameOrigin(request)) {

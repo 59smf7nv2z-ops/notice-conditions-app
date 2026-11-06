@@ -39,6 +39,11 @@ export function sameOrigin(request: Request): boolean {
   return Boolean(refHost && refHost === reqHost);
 }
 
+/** Bracket env read so Next.js cannot inline an empty key at build time. */
+export function anthropicApiKey(): string {
+  return (process.env["ANTHROPIC_API_KEY"] ?? "").trim();
+}
+
 export function sanitizeName(raw: string): string {
   const cleaned = raw.replace(/[/\\?%*:|"<>]/g, "_").replace(/\s+/g, " ").trim();
   return cleaned.slice(0, 80) || "공고";

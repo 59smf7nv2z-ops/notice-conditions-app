@@ -4,6 +4,7 @@ import { fileToBlocks } from "./readers";
 import { KEYMAP, MODEL, MAX_TOKENS, SUBMIT_HINT, SYSTEM_PROMPT, TOOL } from "./schema";
 import { normalize, shapeProblems, toKoreanResult, type FieldValue, type RawResult } from "./normalize";
 import { mockRecord } from "./mock";
+import { anthropicApiKey } from "./http";
 
 export type ExtractOk = {
   공고: string;
@@ -57,7 +58,7 @@ export async function extractNotice(name: string, files: UploadedFile[]): Promis
     };
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = anthropicApiKey();
   if (!apiKey) {
     const raw = mockRecord(readText, name);
     const { fixed, warnings } = normalize(raw);

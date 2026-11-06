@@ -1,18 +1,22 @@
-import { requireIdentity } from "../../../cursor/identity";
+import { getIdentity } from "../../../cursor/identity";
 import { MODEL } from "../../../lib/schema";
-import { json } from "../../../lib/http";
+import { anthropicApiKey, json } from "../../../lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const identity = await requireIdentity(request);
-  if (identity instanceof Response) return identity;
-  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
+  const identity = await getIdentity(request);
+  const hasKey = Boolean(anthropicApiKey());
+  const viewer = identity.verified
+    ? identity.kind === "person"
+      ? identity.name || "사용자"
+      : identity.name || "API 키"
+    : "";
   return json({
     model: MODEL,
     mock: !hasKey,
-    viewer: identity.kind === "person" ? identity.name || "사용자" : identity.name || "API 키",
-    simulated: identity.simulated === true,
+    viewer,
+    simulated: identity.verified && identity.simulated === true,
   });
 }
