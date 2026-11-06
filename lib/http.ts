@@ -20,20 +20,37 @@ function hostOf(urlLike: string): string | null {
   }
 }
 
-function requestHost(request: Request): string {
-  return canonHost(new URL(request.url).host);
+function isInternalHost(host: string): boolean {
+  return host === "loopback" || host === "0.0.0.0" || !host.includes(".");
 }
 
-/** POST extract: Origin must match the request host. Sec-Fetch-Site is never an allow. */
+function headerHost(request: Request, name: string): string {
+  const raw = request.headers.get(name);
+  if (!raw) return "";
+  return canonHost(raw.split(",")[0].trim());
+}
+
+/** Public Host / X-Forwarded-Host first. request.url is often an internal listener. */
+function publicHost(request: Request): string {
+  const header = headerHost(request, "host");
+  const forwarded = headerHost(request, "x-forwarded-host");
+  const urlHost = canonHost(new URL(request.url).host);
+  if (header && !isInternalHost(header)) return header;
+  if (forwarded && !isInternalHost(forwarded)) return forwarded;
+  if (urlHost && !isInternalHost(urlHost)) return urlHost;
+  return header || forwarded || urlHost;
+}
+
+/** POST extract: Origin must match the public site host. Missing Origin fails. */
 export function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
   const originHost = hostOf(origin);
   if (!originHost) return false;
-  if (originHost !== requestHost(request)) return false;
+  if (originHost !== publicHost(request)) return false;
 
   const site = (request.headers.get("sec-fetch-site") || "").toLowerCase();
-  if (site === "cross-site" || site === "none") return false;
+  if (site === "cross-site") return false;
   return true;
 }
 
