@@ -6,18 +6,37 @@ export function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: NO_STORE });
 }
 
-export function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) {
-    const referer = request.headers.get("referer");
-    if (!referer) return true;
-    try {
-      return new URL(referer).origin === new URL(request.url).origin;
-    } catch {
-      return false;
-    }
+function canonHost(host: string): string {
+  const h = host.split(":")[0].toLowerCase();
+  if (h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1") return "loopback";
+  return h;
+}
+
+function hostOf(urlLike: string): string | null {
+  try {
+    return canonHost(new URL(urlLike).host);
+  } catch {
+    return null;
   }
-  return origin === new URL(request.url).origin;
+}
+
+export function sameOrigin(request: Request): boolean {
+  const site = (request.headers.get("sec-fetch-site") || "").toLowerCase();
+  if (site === "same-origin" || site === "none") return true;
+
+  const forwarded = request.headers.get("x-forwarded-host");
+  const hostHdr = request.headers.get("host");
+  const reqHost = canonHost(forwarded || hostHdr || new URL(request.url).host);
+
+  const origin = request.headers.get("origin");
+  if (origin) {
+    const originHost = hostOf(origin);
+    return Boolean(originHost && originHost === reqHost);
+  }
+  const referer = request.headers.get("referer");
+  if (!referer) return true;
+  const refHost = hostOf(referer);
+  return Boolean(refHost && refHost === reqHost);
 }
 
 export function sanitizeName(raw: string): string {

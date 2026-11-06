@@ -101,8 +101,13 @@ export default function Page() {
         const body = new FormData();
         body.set("name", draft.name);
         for (const f of draft.files) body.append("files", f);
-        const res = await fetch("/api/extract", { method: "POST", body });
-        const data = (await res.json()) as Extracted & { error?: string };
+        const res = await fetch("/api/extract", { method: "POST", body, credentials: "same-origin" });
+        let data: Extracted & { error?: string };
+        try {
+          data = (await res.json()) as Extracted & { error?: string };
+        } catch {
+          throw new Error(`추출 실패 (${res.status})`);
+        }
         if (!res.ok && !data.공고) {
           throw new Error(data.error || `추출 실패 (${res.status})`);
         }
