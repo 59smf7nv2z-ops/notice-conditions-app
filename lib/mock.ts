@@ -2,13 +2,17 @@ import type { RawResult } from "./normalize";
 
 export function mockRecord(readText: string, name: string): RawResult {
   const snippet = readText.replace(/\s+/g, " ").slice(0, 80) || `${name} 샘플 원문`;
+  const confirm = /확인/.test(name);
+  const strict = /비해당|엄격/.test(name);
   return {
     local_gov: { value: "대전광역시 중구", evidence: snippet },
     program_name: { value: "소규모 노후 건축물 안전점검", evidence: snippet },
     year: { value: "2026", evidence: snippet },
     season: { value: "하반기", evidence: snippet },
     program_type: { value: "신청형", evidence: snippet },
-    min_age_years: { value: 30, evidence: "사용승인 후 30년 경과" },
+    min_age_years: confirm
+      ? { value: "", evidence: null }
+      : { value: strict ? 80 : 30, evidence: strict ? "사용승인 후 80년 경과" : "사용승인 후 30년 경과" },
     max_floors: { value: "3층 이하", evidence: "3층 이하" },
     max_floor_area: { value: "1000㎡ 이하", evidence: "연면적 1000㎡ 이하" },
     use_conditions: { value: ["주택", "제1·2종 근린생활시설"], evidence: snippet },

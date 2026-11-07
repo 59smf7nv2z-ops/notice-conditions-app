@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "@/components/DashboardProvider";
+import { KindBadge } from "@/components/KindBadge";
+import { batchLabel } from "@/lib/batch";
 import { csvEscape, downloadBlob, flat } from "@/lib/download";
 import sampleExtract from "@/lib/sample-extract.json";
 import type { Extracted, FieldValue } from "@/lib/types";
@@ -55,7 +57,18 @@ function checkTags(result: Extracted["결과"]): string[] {
 }
 
 export function NoticeAnalysisTab() {
-  const { notices, setNotices, selectedNotice, setSelectedNotice, csrf, refreshCsrf } = useDashboard();
+  const {
+    batches,
+    selectedBatch,
+    setSelectedBatch,
+    addBatch,
+    notices,
+    setNotices,
+    selectedNotice,
+    setSelectedNotice,
+    csrf,
+    refreshCsrf,
+  } = useDashboard();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -131,11 +144,7 @@ export function NoticeAnalysisTab() {
       }
       setProgress(100);
       if (added.length) {
-        setNotices((prev) => {
-          const next = [...prev, ...added];
-          setSelectedNotice(next.length - 1);
-          return next;
-        });
+        addBatch(added);
         setFiles([]);
         if (inputRef.current) inputRef.current.value = "";
         setSelectedKey(ROWS[0].key);
@@ -155,18 +164,13 @@ export function NoticeAnalysisTab() {
       setBusy(false);
       setBusyLabel("");
     }
-  }, [files, setNotices, setSelectedNotice, csrf, refreshCsrf]);
+  }, [files, addBatch, csrf, refreshCsrf]);
 
   const loadSample = useCallback(() => {
-    const extracted = asExtracted(sampleExtract as Extracted, "샘플");
-    setNotices((prev) => {
-      const next = [...prev, extracted];
-      setSelectedNotice(next.length - 1);
-      return next;
-    });
+    addBatch([asExtracted(sampleExtract as Extracted, "샘플")]);
     setSelectedKey(ROWS[0].key);
     setError(null);
-  }, [setNotices, setSelectedNotice]);
+  }, [addBatch]);
 
   const selectedField = notice?.결과[selectedKey];
   const tags = notice ? checkTags(notice.결과) : [];
@@ -188,7 +192,8 @@ export function NoticeAnalysisTab() {
       <section>
         <h2 className="text-lg font-semibold text-gov-900">공고문 분석 & 조건 추출</h2>
         <p className="mt-1 text-sm text-slate-600">
-          파일 하나가 공고 하나입니다. 여러 파일을 올리면 공고마다 따로 추출하고, 항목을 누르면 원문 근거를 옆에 보여 줍니다.
+          한 번에 올린 파일은 한 묶음입니다. 파일마다 조건을 뽑되, 단건 공고와 묶음 추출을 구분해서 보여 줍니다. 항목을 누르면
+          원문 근거가 옆에 나옵니다.
         </p>
       </section>
 
@@ -210,7 +215,7 @@ export function NoticeAnalysisTab() {
         >
           <p className="text-sm font-medium text-slate-800">공고문 파일을 여기에 놓으세요</p>
           <p className="mt-1 text-xs text-slate-500">
-            HWP · HWPX · PDF · PNG · JPG · 파일 하나 = 공고 하나 (파일당 12MB)
+            HWP · HWPX · PDF · PNG · JPG · 같이 고른 파일은 한 번의 추출 묶음 (파일당 12MB)
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <button
@@ -256,6 +261,17 @@ export function NoticeAnalysisTab() {
           </ul>
         ) : null}
 
+        {files.length ? (
+          <div className="mt-3 flex items-center gap-2">
+            <KindBadge kind={files.length > 1 ? "묶음" : "단건"} count={files.length} />
+            <p className="text-sm text-slate-600">
+              {files.length > 1
+                ? `같이 선택한 ${files.length}개 파일을 한 묶음으로 추출합니다.`
+                : "파일 하나이므로 단건 공고로 추출합니다."}
+            </p>
+          </div>
+        ) : null}
+
         {busy ? (
           <div className="mt-5 rounded-lg border border-sky-100 bg-sky-50 px-4 py-4" role="status" aria-live="polite">
             <div className="flex items-center gap-3">
@@ -287,26 +303,50 @@ export function NoticeAnalysisTab() {
         </p>
       </section>
 
-      {notices.length ? (
+      {batches.length ? (
         <section className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            <span className="font-medium text-slate-700">공고</span>
-            <select
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-              value={selectedNotice}
-              onChange={(e) => {
-                setSelectedNotice(Number(e.target.value));
-                setSelectedKey(ROWS[0].key);
-              }}
-            >
-              {notices.map((n, i) => (
-                <option key={n.공고 + i} value={i}>
-                  {n.공고}
-                  {n.mock ? " (샘플)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <span className="font-medium text-slate-700">추출 묶음</span>
+              <select
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+                value={selectedBatch}
+                onChange={(e) => {
+                  setSelectedBatch(Number(e.target.value));
+                  setSelectedKey(ROWS[0].key);
+                }}
+              >
+                {batches.map((b, i) => (
+                  <option key={b.id} value={i}>
+                    {batchLabel(b)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {batches[selectedBatch] ? (
+              <KindBadge kind={batches[selectedBatch].kind} count={batches[selectedBatch].items.length} large />
+            ) : null}
+            {notices.length > 1 ? (
+              <label className="flex items-center gap-2 text-sm">
+                <span className="font-medium text-slate-700">묶음 안 공고</span>
+                <select
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+                  value={selectedNotice}
+                  onChange={(e) => {
+                    setSelectedNotice(Number(e.target.value));
+                    setSelectedKey(ROWS[0].key);
+                  }}
+                >
+                  {notices.map((n, i) => (
+                    <option key={n.공고 + i} value={i}>
+                      {n.공고}
+                      {n.mock ? " (샘플)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -326,7 +366,12 @@ export function NoticeAnalysisTab() {
         <section className="grid gap-4 lg:grid-cols-5">
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-3">
             <div className="border-b border-slate-100 px-4 py-3">
-              <h3 className="font-semibold text-gov-900">{notice.공고}</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold text-gov-900">{notice.공고}</h3>
+                {batches[selectedBatch] ? (
+                  <KindBadge kind={batches[selectedBatch].kind} count={batches[selectedBatch].items.length} />
+                ) : null}
+              </div>
               <p className="text-xs text-slate-500">모델 {notice.모델}</p>
               {tags.length ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">

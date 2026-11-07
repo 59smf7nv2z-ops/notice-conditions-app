@@ -11,6 +11,14 @@ export type Extracted = {
   error?: string;
 };
 
+export type ExtractKind = "단건" | "묶음";
+
+export type ExtractBatch = {
+  id: string;
+  kind: ExtractKind;
+  items: Extracted[];
+};
+
 export type Verdict = "해당" | "비해당" | "확인필요";
 
 export type CheckRow = {

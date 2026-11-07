@@ -1,6 +1,7 @@
 "use client";
 
 import { TABS } from "@/lib/types";
+import { KindBadge } from "./KindBadge";
 import { useDashboard } from "./DashboardProvider";
 import { NoticeAnalysisTab } from "./tabs/NoticeAnalysisTab";
 import { BuildingMatchTab } from "./tabs/BuildingMatchTab";
@@ -8,7 +9,8 @@ import { NoticeReportTab } from "./tabs/NoticeReportTab";
 import { MapPlaceholderTab } from "./tabs/MapPlaceholderTab";
 
 export function DashboardShell() {
-  const { tab, setTab, mock, simulated } = useDashboard();
+  const { tab, setTab, mock, simulated, batches, selectedBatch } = useDashboard();
+  const batch = batches[selectedBatch];
 
   return (
     <div className="min-h-screen bg-gov-50">
@@ -41,8 +43,13 @@ export function DashboardShell() {
                   }`}
                   aria-current={active ? "page" : undefined}
                 >
-                  <span className="sm:hidden">{item.short}</span>
-                  <span className="hidden sm:inline">{item.label}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="sm:hidden">{item.short}</span>
+                    <span className="hidden sm:inline">{item.label}</span>
+                    {batch && (item.id === "extract" || item.id === "compare") ? (
+                      <KindBadge kind={batch.kind} count={batch.items.length} />
+                    ) : null}
+                  </span>
                   {active ? (
                     <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-teal-300 sm:inset-x-4" />
                   ) : null}

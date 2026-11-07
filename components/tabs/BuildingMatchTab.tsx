@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/components/DashboardProvider";
-import { judgeBuilding, needsCheckItems } from "@/lib/compare";
+import { KindBadge } from "@/components/KindBadge";
+import { batchLabel, partitionNotices, pickPrimaryMatch } from "@/lib/batch";
+import { needsCheckItems } from "@/lib/compare";
 import { SAMPLE_BUILDINGS, mockRegistryLookup, yearsSince, type RegistryFill } from "@/lib/registry";
 import sampleExtract from "@/lib/sample-extract.json";
 import type { Extracted, Verdict } from "@/lib/types";
@@ -57,15 +59,37 @@ function Tag({ v }: { v: Verdict }) {
 }
 
 export function BuildingMatchTab() {
-  const { notices, selectedNotice, setSelectedNotice, notice, setNotices, setLiveMatch, resetNonce } = useDashboard();
+  const {
+    batches,
+    selectedBatch,
+    setSelectedBatch,
+    addBatch,
+    notices,
+    selectedNotice,
+    setSelectedNotice,
+    notice,
+    setLiveMatch,
+    resetNonce,
+  } = useDashboard();
   const [form, setForm] = useState<RegistryFill>(empty);
   const [query, setQuery] = useState("");
   const [looking, setLooking] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
 
-  const activeNotice = notice ?? (sampleExtract as Extracted);
+  const activeItems = notices.length ? notices : [sampleExtract as Extracted];
+  const activeNotice = notice ?? activeItems[selectedNotice] ?? activeItems[0];
+  const batch = batches[selectedBatch];
+  const kind = batch?.kind ?? "단건";
 
-  const judged = useMemo(() => judgeBuilding(activeNotice, form), [activeNotice, form]);
+  const parts = useMemo(() => partitionNotices(activeItems, form), [activeItems, form]);
+  const primary = pickPrimaryMatch(parts);
+  const judged =
+    (
+      parts.해당.find((r) => r.notice.공고 === activeNotice.공고) ??
+      parts.비해당.find((r) => r.notice.공고 === activeNotice.공고) ??
+      parts.확인필요.find((r) => r.notice.공고 === activeNotice.공고) ??
+      primary
+    )?.judged ?? { overall: "확인필요" as const, checks: [] };
   const checklist = needsCheckItems(activeNotice);
 
   function applyFill(next: RegistryFill) {
@@ -77,7 +101,7 @@ export function BuildingMatchTab() {
 
   function loadSampleNoticeIfEmpty() {
     if (notices.length) return;
-    setNotices([sampleExtract as Extracted]);
+    addBatch([sampleExtract as Extracted]);
     setSelectedNotice(0);
   }
 
@@ -125,6 +149,7 @@ export function BuildingMatchTab() {
       setLiveMatch(null);
       return;
     }
+    const focus = primary ?? { notice: activeNotice, overall: judged.overall, judged };
     setLiveMatch({
       id: "live",
       address: form.address,
@@ -136,40 +161,44 @@ export function BuildingMatchTab() {
       floorArea: form.floorArea,
       use: form.use,
       structure: form.structure,
-      noticeName: activeNotice.공고,
-      overall: judged.overall,
-      checks: judged.checks,
+      noticeName: focus.notice.공고,
+      overall: focus.overall,
+      checks: focus.judged.checks,
     });
-  }, [hasInput, form, judged, activeNotice.공고, setLiveMatch]);
+  }, [hasInput, form, judged, primary, activeNotice.공고, setLiveMatch]);
 
   return (
     <div className="space-y-6">
       <section>
         <h2 className="text-lg font-semibold text-gov-900">건물 정보 대조 & 1차 판정</h2>
         <p className="mt-1 text-sm text-slate-600">
-          주소를 조회하거나 대장을 직접 입력하면, 공고문 분석 탭에서 뽑은 조건과 바로 대조합니다.
+          건축물대장 하나와 현재 추출 묶음을 한 번에 대조합니다. 해당되는 공고문, 해당되지 않는 공고문, 확인필요한 공고문이
+          같이 보입니다.
         </p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <label className="text-sm font-medium" htmlFor="notice-select">
-          대조할 공고
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm font-medium" htmlFor="batch-select">
+            대조할 추출
+          </label>
+          {batch ? <KindBadge kind={kind} count={activeItems.length} large /> : <KindBadge kind="단건" count={1} />}
+        </div>
         <select
-          id="notice-select"
+          id="batch-select"
           className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          value={notices.length ? selectedNotice : 0}
-          onChange={(e) => setSelectedNotice(Number(e.target.value))}
-          disabled={!notices.length}
+          value={batches.length ? selectedBatch : 0}
+          onChange={(e) => setSelectedBatch(Number(e.target.value))}
+          disabled={!batches.length}
         >
-          {notices.length ? (
-            notices.map((n, i) => (
-              <option key={n.공고 + i} value={i}>
-                {n.공고}
+          {batches.length ? (
+            batches.map((b, i) => (
+              <option key={b.id} value={i}>
+                {batchLabel(b)}
               </option>
             ))
           ) : (
-            <option value={0}>샘플 공고(대전중구) · 조건 추출 전이면 이 기준으로 미리 봅니다</option>
+            <option value={0}>단건 추출 · 샘플 공고(대전중구) · 조건 추출 전이면 이 기준으로 미리 봅니다</option>
           )}
         </select>
 
@@ -274,11 +303,47 @@ export function BuildingMatchTab() {
       </section>
 
       {hasInput ? (
+        <section className="grid gap-3 md:grid-cols-3">
+          <VerdictList
+            title="해당되는 공고문"
+            empty="해당되는 공고문이 없습니다."
+            rows={parts.해당}
+            selected={activeNotice.공고}
+            onSelect={(n) => {
+              const i = activeItems.findIndex((x) => x.공고 === n.공고);
+              if (i >= 0) setSelectedNotice(i);
+            }}
+          />
+          <VerdictList
+            title="해당되지 않는 공고문"
+            empty="해당되지 않는 공고문이 없습니다."
+            rows={parts.비해당}
+            selected={activeNotice.공고}
+            onSelect={(n) => {
+              const i = activeItems.findIndex((x) => x.공고 === n.공고);
+              if (i >= 0) setSelectedNotice(i);
+            }}
+          />
+          <VerdictList
+            title="확인필요한 공고문"
+            empty="확인필요한 공고문이 없습니다."
+            rows={parts.확인필요}
+            selected={activeNotice.공고}
+            onSelect={(n) => {
+              const i = activeItems.findIndex((x) => x.공고 === n.공고);
+              if (i >= 0) setSelectedNotice(i);
+            }}
+          />
+        </section>
+      ) : null}
+
+      {hasInput ? (
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
             <div>
               <p className="font-semibold text-gov-900">{form.address || "주소 미입력"}</p>
               <p className="text-xs text-slate-500">
+                {kind === "묶음" ? `묶음 ${activeItems.length}건 중 · ` : "단건 · "}
                 {activeNotice.공고}
                 {form.ownerHint ? ` · ${form.ownerHint}` : ""}
                 {form.basementFloors !== "" ? ` · 지하 ${form.basementFloors}층` : ""}
@@ -331,6 +396,53 @@ export function BuildingMatchTab() {
           </ul>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function VerdictList({
+  title,
+  empty,
+  rows,
+  selected,
+  onSelect,
+}: {
+  title: string;
+  empty: string;
+  rows: { notice: Extracted; overall: Verdict }[];
+  selected: string;
+  onSelect: (n: Extracted) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-gov-900">{title}</h3>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{rows.length}건</span>
+      </div>
+      {rows.length ? (
+        <ul className="mt-3 space-y-2">
+          {rows.map((row) => (
+            <li key={row.notice.공고}>
+              <button
+                type="button"
+                className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                  selected === row.notice.공고
+                    ? "border-gov-600 bg-sky-50"
+                    : "border-slate-200 hover:bg-slate-50"
+                }`}
+                onClick={() => onSelect(row.notice)}
+              >
+                <span className="font-medium text-slate-900">{row.notice.공고}</span>
+                <span className="mt-1 block">
+                  <Badge v={row.overall} />
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">{empty}</p>
+      )}
     </div>
   );
 }
