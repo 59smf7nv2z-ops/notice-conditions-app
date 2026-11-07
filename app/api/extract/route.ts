@@ -2,6 +2,7 @@ import { getIdentity } from "../../../cursor/identity";
 import { extractNotice } from "../../../lib/extract";
 import {
   json,
+  anthropicApiKey,
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_TOTAL_BYTES,
@@ -10,6 +11,7 @@ import {
 } from "../../../lib/http";
 import { extractCsrfOk } from "../../../lib/csrf";
 import { clientIp, releaseExtractSlot, takeExtractSlot } from "../../../lib/rate-limit";
+import { canSpendExtractQuota, QUOTA_GATE_MESSAGE } from "../../../lib/quota";
 import type { UploadedFile } from "../../../lib/readers";
 
 export const runtime = "nodejs";
@@ -17,15 +19,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
-  const identity = await getIdentity(request);
-  if (identity.verified && identity.kind === "key" && identity.appVisibility === "public") {
-    return json({ error: "이 API는 공개 호출을 받지 않습니다." }, 403);
-  }
   if (!sameOrigin(request)) {
     return json({ error: "잘못된 요청 출처입니다." }, 403);
   }
   if (!extractCsrfOk(request)) {
     return json({ error: "세션이 만료되었거나 잘못된 요청입니다. 페이지를 새로고침해 주세요." }, 403);
+  }
+
+  const identity = await getIdentity(request);
+  const allowPaid = canSpendExtractQuota(identity);
+  if (!allowPaid && anthropicApiKey()) {
+    return json({ error: QUOTA_GATE_MESSAGE }, identity.verified ? 403 : 401);
   }
 
   const ip = clientIp(request);
@@ -37,13 +41,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    return await runExtract(request);
+    return await runExtract(request, allowPaid);
   } finally {
     releaseExtractSlot(ip);
   }
 }
 
-async function runExtract(request: Request): Promise<Response> {
+async function runExtract(request: Request, allowPaid: boolean): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -80,7 +84,7 @@ async function runExtract(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await extractNotice(name, files);
+    const result = await extractNotice(name, files, allowPaid);
     if (!Object.keys(result.결과).length && result.skipped.length && !result.readText) {
       return json({ error: "읽을 수 있는 파일이 없습니다.", ...result }, 400);
     }

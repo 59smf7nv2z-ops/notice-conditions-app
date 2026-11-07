@@ -32,6 +32,8 @@ type Ctx = {
   resetForNextMatch: () => void;
   mock: boolean;
   simulated: boolean;
+  canLiveExtract: boolean;
+  viewer: string;
   csrf: string;
   refreshCsrf: () => Promise<string>;
 };
@@ -50,6 +52,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [buildings, setBuildings] = useState<BuildingRecord[]>([]);
   const [mock, setMock] = useState(true);
   const [simulated, setSimulated] = useState(false);
+  const [canLiveExtract, setCanLiveExtract] = useState(false);
+  const [viewer, setViewer] = useState("");
   const [csrf, setCsrf] = useState("");
   const [liveMatch, setLiveMatch] = useState<BuildingRecord | null>(null);
   const [resetNonce, setResetNonce] = useState(0);
@@ -57,9 +61,17 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const refreshCsrf = useCallback(async () => {
     const r = await fetch("/api/status", { cache: "no-store", credentials: "same-origin" });
     if (!r.ok) throw new Error("status");
-    const s = (await r.json()) as { mock: boolean; simulated: boolean; csrf?: string };
+    const s = (await r.json()) as {
+      mock: boolean;
+      simulated: boolean;
+      canLiveExtract?: boolean;
+      viewer?: string;
+      csrf?: string;
+    };
     setMock(Boolean(s.mock));
     setSimulated(Boolean(s.simulated));
+    setCanLiveExtract(Boolean(s.canLiveExtract));
+    setViewer(typeof s.viewer === "string" ? s.viewer : "");
     const token = typeof s.csrf === "string" ? s.csrf : "";
     setCsrf(token);
     return token;
@@ -203,6 +215,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       resetForNextMatch,
       mock,
       simulated,
+      canLiveExtract,
+      viewer,
       csrf,
       refreshCsrf,
     }),
@@ -223,6 +237,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       resetForNextMatch,
       mock,
       simulated,
+      canLiveExtract,
+      viewer,
       csrf,
       refreshCsrf,
     ],

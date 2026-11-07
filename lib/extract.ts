@@ -44,7 +44,7 @@ export async function gatherBlocks(files: UploadedFile[]) {
   return { blocks, skipped, readText };
 }
 
-export async function extractNotice(name: string, files: UploadedFile[]): Promise<ExtractOk> {
+export async function extractNotice(name: string, files: UploadedFile[], allowPaid = false): Promise<ExtractOk> {
   const { blocks, skipped, readText } = await gatherBlocks(files);
   if (!blocks.length) {
     return {
@@ -58,7 +58,7 @@ export async function extractNotice(name: string, files: UploadedFile[]): Promis
     };
   }
 
-  const apiKey = anthropicApiKey();
+  const apiKey = allowPaid ? anthropicApiKey() : "";
   if (!apiKey) {
     const raw = mockRecord(readText, name);
     const { fixed, warnings } = normalize(raw);

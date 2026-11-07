@@ -9,7 +9,7 @@ import { NoticeReportTab } from "./tabs/NoticeReportTab";
 import { MapPlaceholderTab } from "./tabs/MapPlaceholderTab";
 
 export function DashboardShell() {
-  const { tab, setTab, mock, simulated, batches, selectedBatch } = useDashboard();
+  const { tab, setTab, mock, simulated, canLiveExtract, viewer, batches, selectedBatch } = useDashboard();
   const batch = batches[selectedBatch];
 
   return (
@@ -67,6 +67,19 @@ export function DashboardShell() {
             <code className="rounded bg-white/70 px-1">ANTHROPIC_API_KEY</code>를 넣으면 실제 추출이 됩니다.
             {simulated ? " 미리보기 사용자는 모의 로그인입니다." : null}
           </p>
+        </div>
+      ) : null}
+      {!mock && !canLiveExtract ? (
+        <div className="border-b border-amber-200 bg-amber-50 text-amber-950 print:hidden">
+          <p className="mx-auto max-w-6xl px-4 py-2.5 text-sm">
+            실제 조건 추출은 Cursor에 로그인한 담당자만 쓸 수 있습니다. 로그인하지 않은 방문자는 Anthropic 사용량을 쓰지
+            않습니다.
+          </p>
+        </div>
+      ) : null}
+      {!mock && canLiveExtract && viewer ? (
+        <div className="border-b border-slate-200 bg-white text-slate-700 print:hidden">
+          <p className="mx-auto max-w-6xl px-4 py-2 text-xs">로그인: {viewer}</p>
         </div>
       ) : null}
 
