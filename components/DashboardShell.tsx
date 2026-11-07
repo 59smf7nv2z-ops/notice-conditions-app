@@ -4,7 +4,7 @@ import { TABS } from "@/lib/types";
 import { useDashboard } from "./DashboardProvider";
 import { NoticeAnalysisTab } from "./tabs/NoticeAnalysisTab";
 import { BuildingMatchTab } from "./tabs/BuildingMatchTab";
-import { GuideReportTab } from "./tabs/GuideReportTab";
+import { NoticeReportTab } from "./tabs/NoticeReportTab";
 import { MapPlaceholderTab } from "./tabs/MapPlaceholderTab";
 
 export function DashboardShell() {
@@ -12,7 +12,7 @@ export function DashboardShell() {
 
   return (
     <div className="min-h-screen bg-gov-50">
-      <header className="bg-gov-900 text-white shadow-md">
+      <header className="bg-gov-900 text-white shadow-md print:hidden">
         <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:py-5">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 hidden h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white/10 text-sm font-bold tracking-tight sm:flex">
@@ -54,7 +54,7 @@ export function DashboardShell() {
       </header>
 
       {mock ? (
-        <div className="border-b border-amber-200 bg-amber-50 text-amber-950">
+        <div className="border-b border-amber-200 bg-amber-50 text-amber-950 print:hidden">
           <p className="mx-auto max-w-6xl px-4 py-2.5 text-sm">
             지금은 샘플 데이터로 동작합니다. Anthropic API 키가 이 환경에 없습니다. 게시된 앱 비밀 값에{" "}
             <code className="rounded bg-white/70 px-1">ANTHROPIC_API_KEY</code>를 넣으면 실제 추출이 됩니다.
@@ -66,7 +66,7 @@ export function DashboardShell() {
       <main className="mx-auto max-w-6xl px-4 py-6 sm:py-8">
         {tab === "extract" ? <NoticeAnalysisTab /> : null}
         {tab === "compare" ? <BuildingMatchTab /> : null}
-        {tab === "report" ? <GuideReportTab /> : null}
+        {tab === "report" ? <NoticeReportTab /> : null}
         {tab === "map" ? <MapPlaceholderTab /> : null}
       </main>
     </div>

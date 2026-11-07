@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/components/DashboardProvider";
 import { judgeBuilding, needsCheckItems } from "@/lib/compare";
 import { SAMPLE_BUILDINGS, mockRegistryLookup, yearsSince, type RegistryFill } from "@/lib/registry";
@@ -57,7 +57,7 @@ function Tag({ v }: { v: Verdict }) {
 }
 
 export function BuildingMatchTab() {
-  const { notices, selectedNotice, setSelectedNotice, notice, setNotices } = useDashboard();
+  const { notices, selectedNotice, setSelectedNotice, notice, setNotices, setLiveMatch, resetNonce } = useDashboard();
   const [form, setForm] = useState<RegistryFill>(empty);
   const [query, setQuery] = useState("");
   const [looking, setLooking] = useState(false);
@@ -112,6 +112,35 @@ export function BuildingMatchTab() {
   }
 
   const hasInput = Boolean(form.address.trim() || form.ageYears || form.floors || form.floorArea || form.use || form.structure);
+
+  useEffect(() => {
+    if (resetNonce === 0) return;
+    setForm(empty);
+    setQuery("");
+    setHint(null);
+  }, [resetNonce]);
+
+  useEffect(() => {
+    if (!hasInput) {
+      setLiveMatch(null);
+      return;
+    }
+    setLiveMatch({
+      id: "live",
+      address: form.address,
+      ownerHint: form.ownerHint,
+      approvalDate: form.approvalDate,
+      ageYears: form.ageYears,
+      floors: form.floors,
+      basementFloors: form.basementFloors,
+      floorArea: form.floorArea,
+      use: form.use,
+      structure: form.structure,
+      noticeName: activeNotice.공고,
+      overall: judged.overall,
+      checks: judged.checks,
+    });
+  }, [hasInput, form, judged, activeNotice.공고, setLiveMatch]);
 
   return (
     <div className="space-y-6">

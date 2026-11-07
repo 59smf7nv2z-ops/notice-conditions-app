@@ -37,6 +37,8 @@ export type BuildingRecord = {
   checks: CheckRow[];
 };
 
+export type GuideTone = "elder" | "official" | "sms";
+
 export type TabId = "extract" | "compare" | "report" | "map";
 
 export const TABS: { id: TabId; label: string; short: string }[] = [
