@@ -60,6 +60,7 @@ export function NoticeAnalysisTab() {
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string>(ROWS[0].key);
@@ -96,40 +97,63 @@ export function NoticeAnalysisTab() {
     }
     setBusy(true);
     setError(null);
-    const label = files[0].name.replace(/\.[^.]+$/, "");
-    const body = new FormData();
-    body.set("name", label);
-    for (const f of files) body.append("files", f);
+    const queue = [...files];
+    const added: Extracted[] = [];
+    const failed: string[] = [];
     try {
-      await new Promise((r) => window.setTimeout(r, 900));
       const token = csrf || (await refreshCsrf());
-      const res = await fetch("/api/extract", {
-        method: "POST",
-        body,
-        credentials: "same-origin",
-        headers: token ? { "x-extract-csrf": token } : undefined,
-      });
-      let data: Extracted & { error?: string };
-      try {
-        data = (await res.json()) as Extracted & { error?: string };
-      } catch {
-        throw new Error(`추출 실패 (${res.status})`);
+      for (let i = 0; i < queue.length; i++) {
+        const file = queue[i];
+        const label = file.name.replace(/\.[^.]+$/, "") || `공고${i + 1}`;
+        setBusyLabel(`${i + 1}/${queue.length}`);
+        setProgress(Math.min(90, Math.round(((i + 0.2) / queue.length) * 100)));
+        const body = new FormData();
+        body.set("name", label);
+        body.append("files", file);
+        const res = await fetch("/api/extract", {
+          method: "POST",
+          body,
+          credentials: "same-origin",
+          headers: token ? { "x-extract-csrf": token } : undefined,
+        });
+        let data: Extracted & { error?: string };
+        try {
+          data = (await res.json()) as Extracted & { error?: string };
+        } catch {
+          failed.push(`${label}: 추출 실패 (${res.status})`);
+          continue;
+        }
+        if (!res.ok && !data.공고) {
+          failed.push(`${label}: ${data.error || `추출 실패 (${res.status})`}`);
+          continue;
+        }
+        added.push(asExtracted(data, label));
       }
-      if (!res.ok && !data.공고) throw new Error(data.error || `추출 실패 (${res.status})`);
-      const extracted = asExtracted(data, label);
       setProgress(100);
-      setNotices((prev) => {
-        const next = [...prev, extracted];
-        setSelectedNotice(next.length - 1);
-        return next;
-      });
-      setFiles([]);
-      if (inputRef.current) inputRef.current.value = "";
-      setSelectedKey(ROWS[0].key);
+      if (added.length) {
+        setNotices((prev) => {
+          const next = [...prev, ...added];
+          setSelectedNotice(next.length - 1);
+          return next;
+        });
+        setFiles([]);
+        if (inputRef.current) inputRef.current.value = "";
+        setSelectedKey(ROWS[0].key);
+      }
+      if (failed.length) {
+        setError(
+          added.length
+            ? `${added.length}건은 저장했고, 실패한 공고: ${failed.join(" · ")}`
+            : failed.join(" · "),
+        );
+      } else if (!added.length) {
+        setError("추출된 공고가 없습니다.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "추출에 실패했습니다.");
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   }, [files, setNotices, setSelectedNotice, csrf, refreshCsrf]);
 
@@ -164,7 +188,7 @@ export function NoticeAnalysisTab() {
       <section>
         <h2 className="text-lg font-semibold text-gov-900">공고문 분석 & 조건 추출</h2>
         <p className="mt-1 text-sm text-slate-600">
-          공고문을 올리면 Claude가 지원 조건을 표로 뽑고, 항목을 누르면 원문 근거를 옆에 보여 줍니다.
+          파일 하나가 공고 하나입니다. 여러 파일을 올리면 공고마다 따로 추출하고, 항목을 누르면 원문 근거를 옆에 보여 줍니다.
         </p>
       </section>
 
@@ -185,7 +209,9 @@ export function NoticeAnalysisTab() {
           }}
         >
           <p className="text-sm font-medium text-slate-800">공고문 파일을 여기에 놓으세요</p>
-          <p className="mt-1 text-xs text-slate-500">HWP · HWPX · PDF · PNG · JPG (파일당 12MB, 합계 24MB)</p>
+          <p className="mt-1 text-xs text-slate-500">
+            HWP · HWPX · PDF · PNG · JPG · 파일 하나 = 공고 하나 (파일당 12MB)
+          </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
@@ -234,7 +260,10 @@ export function NoticeAnalysisTab() {
           <div className="mt-5 rounded-lg border border-sky-100 bg-sky-50 px-4 py-4" role="status" aria-live="polite">
             <div className="flex items-center gap-3">
               <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-gov-600 border-t-transparent" />
-              <p className="text-sm font-medium text-gov-900">Claude API 기반 공고문 조건 분석 중...</p>
+              <p className="text-sm font-medium text-gov-900">
+                Claude API 기반 공고문 조건 분석 중...
+                {busyLabel ? ` (${busyLabel})` : ""}
+              </p>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
               <div className="h-full rounded-full bg-gov-600 transition-all" style={{ width: `${progress}%` }} />
