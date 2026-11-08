@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import "leaflet/dist/leaflet.css";
 import type { MapPin } from "@/lib/map-model";
+import type { MapFocus } from "@/lib/map-search";
 import type { Verdict } from "@/lib/types";
 
 type SidoFeature = {
@@ -19,9 +20,12 @@ const PIN: Record<Verdict, { fill: string; label: string; shape: "circle" | "squ
   확인필요: { fill: "#ea580c", label: "확인필요", shape: "diamond" },
 };
 
-function pinHtml(v: Verdict, pulse = false): string {
-  const s = PIN[v];
+function pinHtml(v: Verdict | "none", pulse = false): string {
   const extra = pulse ? "outline:3px solid #1d4ed8;outline-offset:2px;" : "";
+  if (v === "none") {
+    return `<span class="nc-pin-mark" style="width:16px;height:16px;background:#64748b;border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.35);${extra}"></span>`;
+  }
+  const s = PIN[v];
   if (s.shape === "square") {
     return `<span class="nc-pin-mark" style="width:16px;height:16px;background:${s.fill};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);${extra}"></span>`;
   }
@@ -41,6 +45,13 @@ function popupHtml(pin: MapPin): string {
   return `<p style="margin:0;font-weight:600">${pin.address}</p><p style="margin:6px 0 0;font-size:12px">1차 판정: <strong>${PIN[pin.overall].label}</strong> · ${pin.noticeName}${pin.sample ? " · 샘플" : ""}</p>`;
 }
 
+function focusPopup(focus: MapFocus): string {
+  if (focus.noNotice) {
+    return `<p style="margin:0;font-weight:600">${focus.address}</p><p style="margin:6px 0 0;font-size:12px">${focus.regionName || "이 지역"}에 등록된 공고가 없습니다. 판정하지 않습니다.</p>`;
+  }
+  return `<p style="margin:0;font-weight:600">${focus.address}</p><p style="margin:6px 0 0;font-size:12px">1차 판정: <strong>${focus.overall ? PIN[focus.overall].label : "—"}</strong>${focus.noticeName ? ` · ${focus.noticeName}` : ""}${focus.sample ? " · 샘플" : ""}</p>`;
+}
+
 export function LeafletKoreaMap({
   coloredIds,
   pins,
@@ -48,7 +59,7 @@ export function LeafletKoreaMap({
 }: {
   coloredIds: string[];
   pins: MapPin[];
-  focus: MapPin | null;
+  focus: MapFocus | null;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -165,11 +176,11 @@ export function LeafletKoreaMap({
     focusLayerRef.current?.remove();
     const icon = L.divIcon({
       className: "nc-pin",
-      html: pinHtml(focus.overall, true),
+      html: pinHtml(focus.noNotice ? "none" : (focus.overall ?? "확인필요"), true),
       iconSize: [22, 22],
       iconAnchor: [11, 11],
     });
-    const marker = L.marker([focus.lat, focus.lng], { icon, zIndexOffset: 800 }).bindPopup(popupHtml(focus)).addTo(map);
+    const marker = L.marker([focus.lat, focus.lng], { icon, zIndexOffset: 800 }).bindPopup(focusPopup(focus)).addTo(map);
     focusLayerRef.current = marker;
     map.flyTo([focus.lat, focus.lng], 16, { duration: 0.6 });
     window.setTimeout(() => marker.openPopup(), 650);

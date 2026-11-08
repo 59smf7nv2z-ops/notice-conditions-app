@@ -21,7 +21,11 @@ const LeafletKoreaMap = dynamic(
   },
 );
 
-const HINTS = ["대전광역시 중구 은행동 12-3", "대전광역시 중구 둔산동 88 공장", "대전광역시 중구 선화동 3-1"];
+const HINTS = [
+  "대전광역시 중구 은행동 12-3",
+  "대전광역시 중구 둔산동 88 공장",
+  "서울특별시 종로구 청운동 1",
+];
 
 function VerdictBadge({ v }: { v: Verdict }) {
   const cls =
@@ -78,7 +82,7 @@ export function RegionMapTab() {
       <section>
         <h2 className="text-lg font-semibold text-gov-900">지역별 노후건축물 현황 지도</h2>
         <p className="mt-1 text-sm text-slate-600">
-          주소를 검색하면 그 위치로 지도를 옮기고, 추출·대조(없으면 모의 대장)로 1차 판정을 보여 줍니다.
+          주소를 검색하면 그 위치로 지도를 옮깁니다. 해당 지역에 등록된 공고가 있을 때만 1차 판정을 하고, 없으면 판정하지 않습니다.
         </p>
       </section>
 
@@ -114,7 +118,16 @@ export function RegionMapTab() {
         ))}
       </div>
       {error ? <p className="text-sm text-rose-700">{error}</p> : null}
-      {hit ? (
+      {hit?.kind === "no-notice" ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
+          <p className="text-xs font-medium text-slate-500">공고 없음</p>
+          <p className="mt-1 text-sm font-semibold text-gov-900">{hit.focus.address}</p>
+          <p className="mt-2 text-sm text-slate-700">
+            {hit.regionName}에 등록된 공고가 없어 다른 지역 공고로 판정하지 않습니다.
+          </p>
+        </div>
+      ) : null}
+      {hit?.kind === "verdict" ? (
         <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
           <p className="text-xs font-medium text-slate-500">{hit.source === "match" ? "추출·대조 결과" : "모의 대장 판정"}</p>
           <p className="mt-1 text-sm font-semibold text-gov-900">{hit.pin.address}</p>
@@ -130,7 +143,7 @@ export function RegionMapTab() {
       </p>
 
       <div className="relative min-h-[36rem] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <LeafletKoreaMap coloredIds={coloredIds} pins={pins} focus={hit?.pin ?? null} />
+        <LeafletKoreaMap coloredIds={coloredIds} pins={pins} focus={hit?.focus ?? null} />
         <div className="pointer-events-none absolute left-3 top-3 z-[500] max-w-[16rem] rounded-lg bg-white/95 p-3 text-xs shadow-md ring-1 ring-slate-200">
           <p className="font-semibold text-gov-900">범례</p>
           <ul className="mt-2 space-y-1.5 text-slate-700">
