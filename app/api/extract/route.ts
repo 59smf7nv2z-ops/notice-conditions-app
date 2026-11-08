@@ -1,4 +1,4 @@
-import { requireIdentity } from "../../../cursor/identity";
+import { requireIdentity, requireTeamRole } from "../../../cursor/identity";
 import { extractNotice } from "../../../lib/extract";
 import {
   json,
@@ -23,6 +23,10 @@ export async function POST(request: Request) {
   }
   if (identity.kind !== "person") {
     return json({ error: "로그인한 담당자만 조건 추출을 쓸 수 있습니다." }, 403);
+  }
+  const team = requireTeamRole(identity, ["admin", "member"]);
+  if (team instanceof Response && identity.appVisibility !== "private") {
+    return json({ error: "이 팀의 담당자만 조건 추출을 쓸 수 있습니다." }, 403);
   }
   if (!sameOrigin(request)) {
     return json({ error: "잘못된 요청 출처입니다." }, 403);

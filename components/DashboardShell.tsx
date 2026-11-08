@@ -72,7 +72,7 @@ export function DashboardShell() {
       {!signedIn ? (
         <div className="border-b border-amber-200 bg-amber-50 text-amber-950 print:hidden">
           <p className="mx-auto max-w-6xl px-4 py-2.5 text-sm">
-            조건 추출은 Cursor에 로그인한 팀 담당자만 쓸 수 있습니다. 게시할 때 공개가 아니라 팀으로 열어 주세요.
+            조건 추출은 Cursor에 로그인한 담당자만 쓸 수 있습니다. 가능하면 팀으로, 팀이 없으면 비공개로 열어 주세요.
           </p>
         </div>
       ) : null}
