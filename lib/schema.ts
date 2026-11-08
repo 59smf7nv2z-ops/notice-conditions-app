@@ -1,9 +1,11 @@
 export const MODEL = "claude-sonnet-5-5";
 export const MAX_TOKENS = 4096;
 export const MIN_TEXT = 150;
-export const MAX_FILES = 12;
-export const MAX_FILE_BYTES = 12 * 1024 * 1024;
-export const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
+export const MAX_FILES = 8;
+export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+export const MAX_INFLATE_BYTES = 8 * 1024 * 1024;
+export const MAX_ZIP_UNCOMPRESSED = 16 * 1024 * 1024;
 
 export const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",

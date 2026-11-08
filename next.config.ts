@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["cfb", "iconv-lite"],
+  serverExternalPackages: ["cfb", "iconv-lite", "@electric-sql/pglite"],
   webpack: (config) => {
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js"],

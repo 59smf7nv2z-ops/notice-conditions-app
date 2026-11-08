@@ -2,7 +2,7 @@ import { inflateRawSync } from "node:zlib";
 import iconv from "iconv-lite";
 import JSZip from "jszip";
 import * as CFB from "cfb";
-import { IMAGE_TYPES, MIN_TEXT } from "./schema";
+import { IMAGE_TYPES, MAX_INFLATE_BYTES, MAX_ZIP_UNCOMPRESSED, MIN_TEXT } from "./schema";
 
 export type ContentBlock =
   | { type: "text"; text: string }
@@ -16,8 +16,25 @@ function extOf(name: string): string {
   return i >= 0 ? name.slice(i).toLowerCase() : "";
 }
 
+function zipUncompressedBytes(z: JSZip): number {
+  let total = 0;
+  z.forEach((_, file) => {
+    if (file.dir) return;
+    const size = (file as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+    total += typeof size === "number" && Number.isFinite(size) ? size : 0;
+  });
+  return total;
+}
+
+function assertZipBudget(z: JSZip): void {
+  if (zipUncompressedBytes(z) > MAX_ZIP_UNCOMPRESSED) {
+    throw new Error("압축을 풀면 용량이 너무 큽니다");
+  }
+}
+
 function readHwpx(bytes: Buffer): Promise<string> {
   return JSZip.loadAsync(bytes).then(async (z) => {
+    assertZipBudget(z);
     const names = Object.keys(z.files)
       .filter((n) => /^Contents\/section\d+\.xml$/.test(n))
       .sort();
@@ -80,11 +97,17 @@ function readHwp(bytes: Buffer): string {
     .sort((a, b) => Number(a.entry.name.replace(/\D/g, "")) - Number(b.entry.name.replace(/\D/g, "")))
     .map((x) => x.entry);
   const paras: string[] = [];
-  for (const sec of sections) {
+  for (const sec of sections.slice(0, 24)) {
     let data = cfbContent(sec);
     if (!data.length) continue;
     if (compressed) {
-      data = inflateRawSync(data);
+      if (data.length > MAX_INFLATE_BYTES) {
+        throw new Error("압축된 본문이 너무 큽니다");
+      }
+      data = inflateRawSync(data, { maxOutputLength: MAX_INFLATE_BYTES });
+    }
+    if (data.length > MAX_INFLATE_BYTES) {
+      throw new Error("풀어 낸 본문이 너무 큽니다");
     }
     let i = 0;
     while (i + 4 <= data.length) {
@@ -108,6 +131,7 @@ function readHwp(bytes: Buffer): string {
 
 async function readDocx(bytes: Buffer): Promise<string> {
   const z = await JSZip.loadAsync(bytes);
+  assertZipBudget(z);
   const file = z.file("word/document.xml");
   if (!file) throw new Error("docx 본문을 찾지 못했습니다");
   const xml = await file.async("string");

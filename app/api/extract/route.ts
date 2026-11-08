@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   }
 
   const ip = clientIp(request);
-  const slot = takeExtractSlot(ip);
+  const slot = await takeExtractSlot(ip);
   if (!slot.ok) {
     return json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요." }, 429, {
       "retry-after": String(slot.retryAfterSec),
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   try {
     return await runExtract(request);
   } finally {
-    releaseExtractSlot(ip);
+    await releaseExtractSlot(slot.leaseId, ip);
   }
 }
 
@@ -64,11 +64,11 @@ async function runExtract(request: Request): Promise<Response> {
     const file = part as File;
     const rawName = (file.name || "파일").replace(/[/\\]/g, "_").slice(0, 200);
     if (file.size > MAX_FILE_BYTES) {
-      return json({ error: `${rawName} 파일이 너무 큽니다(파일당 최대 12MB).` }, 413);
+      return json({ error: `${rawName} 파일이 너무 큽니다(파일당 최대 8MB).` }, 413);
     }
     total += file.size;
     if (total > MAX_TOTAL_BYTES) {
-      return json({ error: "한 공고의 전체 용량은 24MB를 넘을 수 없습니다." }, 413);
+      return json({ error: "한 공고의 전체 용량은 16MB를 넘을 수 없습니다." }, 413);
     }
     const buf = Buffer.from(await file.arrayBuffer());
     files.push({ name: rawName, bytes: buf });

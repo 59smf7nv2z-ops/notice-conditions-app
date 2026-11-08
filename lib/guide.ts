@@ -5,6 +5,10 @@ import { flat } from "./download";
 export const PRIVACY_NOTICE =
   "본 안내는 건축물대장 등 공개된 행정정보를 바탕으로 작성되었으며, 성명·연락처 등 개인식별정보는 저장하지 않습니다.";
 
+/** Shown on extract: uploads go to Anthropic when a key is configured. */
+export const ANTHROPIC_PROCESS_NOTICE =
+  "실제 추출을 누르면 올린 공고 파일이 Anthropic(Claude)으로 전송되어 처리됩니다. 이 환경에 키가 없으면 샘플 결과만 쓰고 전송하지 않습니다.";
+
 export function candidatesOf(buildings: BuildingRecord[]): BuildingRecord[] {
   return buildings.filter((b) => b.overall === "해당" || b.overall === "확인필요");
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboard } from "@/components/DashboardProvider";
 import { KindBadge } from "@/components/KindBadge";
 import { batchLabel } from "@/lib/batch";
+import { ANTHROPIC_PROCESS_NOTICE } from "@/lib/guide";
 import { csvEscape, downloadBlob, flat } from "@/lib/download";
 import sampleExtract from "@/lib/sample-extract.json";
 import type { Extracted, FieldValue } from "@/lib/types";
@@ -195,6 +196,7 @@ export function NoticeAnalysisTab() {
           한 번에 올린 파일은 한 묶음입니다. 파일마다 조건을 뽑되, 단건 공고와 묶음 추출을 구분해서 보여 줍니다. 항목을 누르면
           원문 근거가 옆에 나옵니다.
         </p>
+        <p className="mt-2 text-sm text-slate-600">{ANTHROPIC_PROCESS_NOTICE}</p>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -215,7 +217,7 @@ export function NoticeAnalysisTab() {
         >
           <p className="text-sm font-medium text-slate-800">공고문 파일을 여기에 놓으세요</p>
           <p className="mt-1 text-xs text-slate-500">
-            HWP · HWPX · PDF · PNG · JPG · 같이 고른 파일은 한 번의 추출 묶음 (파일당 12MB)
+            HWP · HWPX · PDF · PNG · JPG · 같이 고른 파일은 한 번의 추출 묶음 (파일당 8MB)
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <button
