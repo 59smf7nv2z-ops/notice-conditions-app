@@ -1,12 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { useDashboard } from "@/components/DashboardProvider";
 import { KOREA_SIDO } from "@/lib/korea-sido";
 import { collectMapPins, noticesOfBatches, sidoIdsWithNotices } from "@/lib/map-model";
+import { searchMapAddress, type SearchHit } from "@/lib/map-search";
 import sampleExtract from "@/lib/sample-extract.json";
-import type { Extracted } from "@/lib/types";
+import type { Extracted, Verdict } from "@/lib/types";
 
 const LeafletKoreaMap = dynamic(
   () => import("./LeafletKoreaMap").then((m) => m.LeafletKoreaMap),
@@ -20,8 +21,25 @@ const LeafletKoreaMap = dynamic(
   },
 );
 
+const HINTS = ["대전광역시 중구 은행동 12-3", "대전광역시 중구 둔산동 88 공장", "대전광역시 중구 선화동 3-1"];
+
+function VerdictBadge({ v }: { v: Verdict }) {
+  const cls =
+    v === "해당"
+      ? "bg-emerald-100 text-emerald-900 ring-emerald-300"
+      : v === "비해당"
+        ? "bg-rose-100 text-rose-900 ring-rose-300"
+        : "bg-orange-100 text-orange-950 ring-orange-300";
+  const text = v === "해당" ? "해당(적합)" : v === "비해당" ? "비해당(불적합)" : "확인필요(수동검토)";
+  return <span className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ring-1 ${cls}`}>{text}</span>;
+}
+
 export function RegionMapTab() {
   const { batches, buildings, liveMatch, notices } = useDashboard();
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hit, setHit] = useState<SearchHit | null>(null);
 
   const allNotices = useMemo(() => {
     const fromBatches = noticesOfBatches(batches);
@@ -39,22 +57,80 @@ export function RegionMapTab() {
     [buildings, liveMatch, allNotices],
   );
 
+  async function onSearch(e?: FormEvent, preset?: string) {
+    e?.preventDefault();
+    const q = (preset ?? query).trim();
+    if (preset) setQuery(preset);
+    setBusy(true);
+    setError(null);
+    const result = await searchMapAddress(q, pins, allNotices);
+    setBusy(false);
+    if ("error" in result) {
+      setHit(null);
+      setError(result.error);
+      return;
+    }
+    setHit(result);
+  }
+
   return (
     <div className="space-y-4">
       <section>
         <h2 className="text-lg font-semibold text-gov-900">지역별 노후건축물 현황 지도</h2>
         <p className="mt-1 text-sm text-slate-600">
-          OpenStreetMap 위에서 공고가 있는 시·도는 파란색, 없는 시·도는 회색입니다. 건물 핀은 1차 판정에 따라 모양이 달라집니다.
-          지도를 확대·이동해 주소를 확인할 수 있습니다.
+          주소를 검색하면 그 위치로 지도를 옮기고, 추출·대조(없으면 모의 대장)로 1차 판정을 보여 줍니다.
         </p>
       </section>
+
+      <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={(e) => void onSearch(e)}>
+        <label htmlFor="map-address" className="sr-only">
+          건물 주소
+        </label>
+        <input
+          id="map-address"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="예: 대전광역시 중구 은행동 12-3"
+          className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-gov-900 shadow-sm outline-none ring-gov-600 focus:ring-2"
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-lg bg-gov-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gov-700 disabled:opacity-60"
+        >
+          {busy ? "찾는 중…" : "주소 검색"}
+        </button>
+      </form>
+      <div className="flex flex-wrap gap-2">
+        {HINTS.map((h) => (
+          <button
+            key={h}
+            type="button"
+            className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200"
+            onClick={() => void onSearch(undefined, h)}
+          >
+            {h}
+          </button>
+        ))}
+      </div>
+      {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+      {hit ? (
+        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs font-medium text-slate-500">{hit.source === "match" ? "추출·대조 결과" : "모의 대장 판정"}</p>
+          <p className="mt-1 text-sm font-semibold text-gov-900">{hit.pin.address}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <VerdictBadge v={hit.pin.overall} />
+            <span className="text-xs text-slate-600">{hit.pin.noticeName}</span>
+          </div>
+        </div>
+      ) : null}
 
       <p className="text-xs text-slate-500">
         {usedSamples ? "판정이 모자라면 대전 중구 샘플 핀을 함께 표시합니다." : "추출·대조 결과를 지도에 반영했습니다."}
       </p>
 
       <div className="relative min-h-[36rem] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <LeafletKoreaMap coloredIds={coloredIds} pins={pins} />
+        <LeafletKoreaMap coloredIds={coloredIds} pins={pins} focus={hit?.pin ?? null} />
         <div className="pointer-events-none absolute left-3 top-3 z-[500] max-w-[16rem] rounded-lg bg-white/95 p-3 text-xs shadow-md ring-1 ring-slate-200">
           <p className="font-semibold text-gov-900">범례</p>
           <ul className="mt-2 space-y-1.5 text-slate-700">

@@ -19,15 +19,16 @@ const PIN: Record<Verdict, { fill: string; label: string; shape: "circle" | "squ
   확인필요: { fill: "#ea580c", label: "확인필요", shape: "diamond" },
 };
 
-function pinHtml(v: Verdict): string {
+function pinHtml(v: Verdict, pulse = false): string {
   const s = PIN[v];
+  const extra = pulse ? "outline:3px solid #1d4ed8;outline-offset:2px;" : "";
   if (s.shape === "square") {
-    return `<span class="nc-pin-mark" style="width:16px;height:16px;background:${s.fill};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)"></span>`;
+    return `<span class="nc-pin-mark" style="width:16px;height:16px;background:${s.fill};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);${extra}"></span>`;
   }
   if (s.shape === "diamond") {
-    return `<span class="nc-pin-mark" style="width:14px;height:14px;background:${s.fill};border:2px solid #fff;transform:rotate(45deg);box-shadow:0 1px 4px rgba(0,0,0,.35)"></span>`;
+    return `<span class="nc-pin-mark" style="width:14px;height:14px;background:${s.fill};border:2px solid #fff;transform:rotate(45deg);box-shadow:0 1px 4px rgba(0,0,0,.35);${extra}"></span>`;
   }
-  return `<span class="nc-pin-mark" style="width:16px;height:16px;background:${s.fill};border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.35)"></span>`;
+  return `<span class="nc-pin-mark" style="width:16px;height:16px;background:${s.fill};border:2px solid #fff;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.35);${extra}"></span>`;
 }
 
 function leafletNs(mod: typeof import("leaflet") | { default: typeof import("leaflet") }): typeof import("leaflet") {
@@ -36,8 +37,25 @@ function leafletNs(mod: typeof import("leaflet") | { default: typeof import("lea
   return m.default as typeof import("leaflet");
 }
 
-export function LeafletKoreaMap({ coloredIds, pins }: { coloredIds: string[]; pins: MapPin[] }) {
+function popupHtml(pin: MapPin): string {
+  return `<p style="margin:0;font-weight:600">${pin.address}</p><p style="margin:6px 0 0;font-size:12px">1차 판정: <strong>${PIN[pin.overall].label}</strong> · ${pin.noticeName}${pin.sample ? " · 샘플" : ""}</p>`;
+}
+
+export function LeafletKoreaMap({
+  coloredIds,
+  pins,
+  focus,
+}: {
+  coloredIds: string[];
+  pins: MapPin[];
+  focus: MapPin | null;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<import("leaflet").Map | null>(null);
+  const LRef = useRef<typeof import("leaflet") | null>(null);
+  const focusLayerRef = useRef<import("leaflet").Marker | null>(null);
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
 
   const dataKey = `${coloredIds.join("|")}|${pins.map((p) => `${p.id}:${p.overall}:${p.lat}:${p.lng}`).join("|")}`;
 
@@ -55,6 +73,7 @@ export function LeafletKoreaMap({ coloredIds, pins }: { coloredIds: string[]; pi
       ]);
       if (cancelled || !hostRef.current) return;
       const L = leafletNs(leafletMod);
+      LRef.current = L;
 
       map = L.map(hostRef.current, {
         center: [36.35, 127.4],
@@ -64,6 +83,7 @@ export function LeafletKoreaMap({ coloredIds, pins }: { coloredIds: string[]; pi
         scrollWheelZoom: true,
         attributionControl: true,
       });
+      mapRef.current = map;
 
       const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -108,14 +128,13 @@ export function LeafletKoreaMap({ coloredIds, pins }: { coloredIds: string[]; pi
           iconSize: [20, 20],
           iconAnchor: [10, 10],
         });
-        L.marker([pin.lat, pin.lng], { icon, zIndexOffset: 500 })
-          .bindPopup(
-            `<p style="margin:0;font-weight:600">${pin.address}</p><p style="margin:6px 0 0;font-size:12px">${PIN[pin.overall].label} · ${pin.noticeName}${pin.sample ? " · 샘플" : ""}</p>`,
-          )
-          .addTo(map);
+        L.marker([pin.lat, pin.lng], { icon, zIndexOffset: 500 }).bindPopup(popupHtml(pin)).addTo(map);
       }
 
-      if (pins.length) {
+      const initial = focusRef.current;
+      if (initial) {
+        map.setView([initial.lat, initial.lng], 16, { animate: false });
+      } else if (pins.length) {
         const bounds = L.latLngBounds(pins.map((p) => [p.lat, p.lng] as [number, number]));
         map.fitBounds(bounds.pad(0.55), { maxZoom: 14, animate: false });
       } else {
@@ -132,11 +151,29 @@ export function LeafletKoreaMap({ coloredIds, pins }: { coloredIds: string[]; pi
     return () => {
       cancelled = true;
       ro?.disconnect();
+      focusLayerRef.current = null;
       map?.remove();
+      mapRef.current = null;
     };
-    // Recreate the map when overlay data changes (tab stays mounted while open).
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataKey encodes coloredIds and pins
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dataKey encodes overlay data; focus applied in a later effect
   }, [dataKey]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const L = LRef.current;
+    if (!map || !L || !focus) return;
+    focusLayerRef.current?.remove();
+    const icon = L.divIcon({
+      className: "nc-pin",
+      html: pinHtml(focus.overall, true),
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+    });
+    const marker = L.marker([focus.lat, focus.lng], { icon, zIndexOffset: 800 }).bindPopup(popupHtml(focus)).addTo(map);
+    focusLayerRef.current = marker;
+    map.flyTo([focus.lat, focus.lng], 16, { duration: 0.6 });
+    window.setTimeout(() => marker.openPopup(), 650);
+  }, [focus]);
 
   return (
     <div
