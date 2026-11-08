@@ -35,6 +35,7 @@ const ROWS: { key: string; label: string }[] = [
 function asExtracted(data: Extracted & { error?: string }, fallbackName: string): Extracted {
   return {
     공고: data.공고 || fallbackName,
+    파일명: data.파일명 || fallbackName,
     모델: data.모델 || "",
     결과: data.결과 || {},
     skipped: data.skipped || [],
@@ -63,6 +64,10 @@ export function NoticeAnalysisTab() {
     selectedBatch,
     setSelectedBatch,
     addBatch,
+    renameBatch,
+    deleteBatch,
+    renameNotice,
+    deleteNotice,
     notices,
     setNotices,
     selectedNotice,
@@ -306,29 +311,75 @@ export function NoticeAnalysisTab() {
       </section>
 
       {batches.length ? (
-        <section className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <span className="font-medium text-slate-700">추출 묶음</span>
-              <select
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-                value={selectedBatch}
-                onChange={(e) => {
-                  setSelectedBatch(Number(e.target.value));
-                  setSelectedKey(ROWS[0].key);
-                }}
+        <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm">
+                <span className="font-medium text-slate-700">추출</span>
+                <select
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
+                  value={selectedBatch}
+                  onChange={(e) => {
+                    setSelectedBatch(Number(e.target.value));
+                    setSelectedKey(ROWS[0].key);
+                  }}
+                >
+                  {batches.map((b, i) => (
+                    <option key={b.id} value={i}>
+                      {batchLabel(b)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {batches[selectedBatch] ? (
+                <KindBadge kind={batches[selectedBatch].kind} count={batches[selectedBatch].items.length} large />
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium"
+                onClick={() => downloadBlob("요약.csv", new Blob([summaryCsv], { type: "text/csv;charset=utf-8" }))}
               >
-                {batches.map((b, i) => (
-                  <option key={b.id} value={i}>
-                    {batchLabel(b)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {batches[selectedBatch] ? (
-              <KindBadge kind={batches[selectedBatch].kind} count={batches[selectedBatch].items.length} large />
-            ) : null}
-            {notices.length > 1 ? (
+                요약 CSV
+              </button>
+              <button type="button" className="text-sm text-gov-700" onClick={() => setNotices([])}>
+                전부 삭제
+              </button>
+            </div>
+          </div>
+          {batches[selectedBatch] ? (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-[12rem] flex-1 text-sm">
+                <span className="font-medium text-slate-700">
+                  {batches[selectedBatch].kind === "묶음" ? "묶음 이름" : "단건 이름"}
+                </span>
+                <input
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none ring-gov-600 focus:ring-2"
+                  value={
+                    batches[selectedBatch].kind === "단건"
+                      ? batches[selectedBatch].title || notices[0]?.공고 || ""
+                      : batches[selectedBatch].title || ""
+                  }
+                  placeholder={
+                    batches[selectedBatch].kind === "묶음"
+                      ? "비우면 파일 이름으로 표시합니다"
+                      : notices[0]?.파일명 || notices[0]?.공고 || "파일 이름"
+                  }
+                  onChange={(e) => renameBatch(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-800"
+                onClick={deleteBatch}
+              >
+                {batches[selectedBatch].kind === "묶음" ? "이 묶음 삭제" : "이 단건 삭제"}
+              </button>
+            </div>
+          ) : null}
+          {notices.length > 1 ? (
+            <div className="flex flex-wrap items-end gap-2">
               <label className="flex items-center gap-2 text-sm">
                 <span className="font-medium text-slate-700">묶음 안 공고</span>
                 <select
@@ -340,27 +391,31 @@ export function NoticeAnalysisTab() {
                   }}
                 >
                   {notices.map((n, i) => (
-                    <option key={n.공고 + i} value={i}>
+                    <option key={(n.파일명 || n.공고) + i} value={i}>
                       {n.공고}
                       {n.mock ? " (샘플)" : ""}
                     </option>
                   ))}
                 </select>
               </label>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium"
-              onClick={() => downloadBlob("요약.csv", new Blob([summaryCsv], { type: "text/csv;charset=utf-8" }))}
-            >
-              요약 CSV
-            </button>
-            <button type="button" className="text-sm text-gov-700" onClick={() => setNotices([])}>
-              세션 결과 지우기
-            </button>
-          </div>
+              <label className="min-w-[12rem] flex-1 text-sm">
+                <span className="font-medium text-slate-700">공고 이름</span>
+                <input
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none ring-gov-600 focus:ring-2"
+                  value={notice?.공고 ?? ""}
+                  placeholder={notice?.파일명 || "파일 이름"}
+                  onChange={(e) => renameNotice(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-800"
+                onClick={deleteNotice}
+              >
+                이 공고만 삭제
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

@@ -2,15 +2,26 @@ import { judgeBuilding } from "./compare";
 import type { BuildingRecord, ExtractBatch, Extracted, ExtractKind, Verdict } from "./types";
 
 export function makeBatch(items: Extracted[]): ExtractBatch {
+  const kind = items.length > 1 ? "묶음" : "단건";
   return {
     id: crypto.randomUUID(),
-    kind: items.length > 1 ? "묶음" : "단건",
+    kind,
+    title: kind === "단건" ? items[0]?.공고 || "" : "",
     items,
   };
 }
 
+export function batchDisplayName(batch: ExtractBatch): string {
+  const named = batch.title?.trim();
+  if (named) return named;
+  if (batch.kind === "단건") return batch.items[0]?.공고 || "공고";
+  return "";
+}
+
 export function batchLabel(batch: ExtractBatch): string {
-  if (batch.kind === "단건") return `단건 · ${batch.items[0]?.공고 || "공고"}`;
+  const named = batch.title?.trim();
+  if (batch.kind === "단건") return `단건 · ${named || batch.items[0]?.공고 || "공고"}`;
+  if (named) return `묶음 · ${batch.items.length}건 · ${named}`;
   const first = batch.items[0]?.공고 || "공고";
   return `묶음 · ${batch.items.length}건 (${first} 외)`;
 }

@@ -17,6 +17,10 @@ type Ctx = {
   selectedBatch: number;
   setSelectedBatch: (i: number) => void;
   addBatch: (items: Extracted[]) => void;
+  renameBatch: (title: string) => void;
+  deleteBatch: () => void;
+  renameNotice: (title: string) => void;
+  deleteNotice: () => void;
   notices: Extracted[];
   setNotices: (n: Extracted[] | ((p: Extracted[]) => Extracted[])) => void;
   selectedNotice: number;
@@ -139,6 +143,64 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setSelectedNotice(0);
   }, []);
 
+  const renameBatch = useCallback((title: string) => {
+    setBatches((prev) =>
+      prev.map((b, i) => {
+        if (i !== selectedBatch) return b;
+        const next = { ...b, title };
+        if (next.kind === "단건" && next.items[0]) {
+          next.items = [{ ...next.items[0], 공고: title.trim() || next.items[0].파일명 || next.items[0].공고 }];
+        }
+        return next;
+      }),
+    );
+  }, [selectedBatch]);
+
+  const deleteBatch = useCallback(() => {
+    setBatches((prev) => {
+      if (!prev.length) return prev;
+      const next = prev.filter((_, i) => i !== selectedBatch);
+      setSelectedBatch(Math.min(selectedBatch, Math.max(0, next.length - 1)));
+      setSelectedNotice(0);
+      return next;
+    });
+  }, [selectedBatch]);
+
+  const renameNotice = useCallback((title: string) => {
+    setBatches((prev) =>
+      prev.map((b, i) => {
+        if (i !== selectedBatch) return b;
+        const items = b.items.map((item, j) => (j === selectedNotice ? { ...item, 공고: title.trim() || item.파일명 || item.공고 } : item));
+        const next = { ...b, items };
+        if (next.kind === "단건") next.title = items[0]?.공고 || next.title;
+        return next;
+      }),
+    );
+  }, [selectedBatch, selectedNotice]);
+
+  const deleteNotice = useCallback(() => {
+    setBatches((prev) => {
+      const b = prev[selectedBatch];
+      if (!b) return prev;
+      const items = b.items.filter((_, j) => j !== selectedNotice);
+      if (!items.length) {
+        const next = prev.filter((_, i) => i !== selectedBatch);
+        setSelectedBatch(Math.min(selectedBatch, Math.max(0, next.length - 1)));
+        setSelectedNotice(0);
+        return next;
+      }
+      const kind = items.length > 1 ? "묶음" : "단건";
+      const nextBatch: ExtractBatch = {
+        ...b,
+        kind,
+        items,
+        title: kind === "단건" ? (b.title?.trim() ? b.title : items[0].공고) : b.title,
+      };
+      setSelectedNotice(Math.min(selectedNotice, items.length - 1));
+      return prev.map((row, i) => (i === selectedBatch ? nextBatch : row));
+    });
+  }, [selectedBatch, selectedNotice]);
+
   const setNotices = useCallback((n: Extracted[] | ((p: Extracted[]) => Extracted[])) => {
     if (typeof n === "function") {
       setBatches((prev) => {
@@ -200,6 +262,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       selectedBatch,
       setSelectedBatch: selectBatch,
       addBatch,
+      renameBatch,
+      deleteBatch,
+      renameNotice,
+      deleteNotice,
       notices,
       setNotices,
       selectedNotice,
@@ -226,6 +292,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       selectedBatch,
       selectBatch,
       addBatch,
+      renameBatch,
+      deleteBatch,
+      renameNotice,
+      deleteNotice,
       notices,
       setNotices,
       selectedNotice,

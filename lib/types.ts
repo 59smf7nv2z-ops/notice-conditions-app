@@ -2,6 +2,7 @@ export type FieldValue = { value: unknown; evidence: string | null };
 
 export type Extracted = {
   공고: string;
+  파일명?: string;
   모델: string;
   결과: Record<string, FieldValue>;
   skipped: string[];
@@ -16,6 +17,7 @@ export type ExtractKind = "단건" | "묶음";
 export type ExtractBatch = {
   id: string;
   kind: ExtractKind;
+  title: string;
   items: Extracted[];
 };
 
