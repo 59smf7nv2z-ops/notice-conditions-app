@@ -1,3 +1,4 @@
+import { requireIdentity } from "../../../cursor/identity";
 import { extractNotice } from "../../../lib/extract";
 import {
   json,
@@ -16,6 +17,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
+  const identity = await requireIdentity(request);
+  if (identity instanceof Response) {
+    return json({ error: "로그인한 담당자만 조건 추출을 쓸 수 있습니다." }, 401);
+  }
+  if (identity.kind !== "person") {
+    return json({ error: "로그인한 담당자만 조건 추출을 쓸 수 있습니다." }, 403);
+  }
   if (!sameOrigin(request)) {
     return json({ error: "잘못된 요청 출처입니다." }, 403);
   }

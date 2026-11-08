@@ -20,6 +20,7 @@ export async function GET(request: Request) {
       model: MODEL,
       mock: !hasKey,
       viewer,
+      signedIn: identity.verified && identity.kind === "person",
       simulated: identity.verified && identity.simulated === true,
       csrf,
     },
