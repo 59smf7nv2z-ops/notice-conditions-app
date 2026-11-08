@@ -1,8 +1,6 @@
-import { getIdentity } from "../../../cursor/identity";
 import { extractNotice } from "../../../lib/extract";
 import {
   json,
-  anthropicApiKey,
   MAX_FILE_BYTES,
   MAX_FILES,
   MAX_TOTAL_BYTES,
@@ -11,7 +9,6 @@ import {
 } from "../../../lib/http";
 import { extractCsrfOk } from "../../../lib/csrf";
 import { clientIp, releaseExtractSlot, takeExtractSlot } from "../../../lib/rate-limit";
-import { canSpendExtractQuota, QUOTA_GATE_MESSAGE } from "../../../lib/quota";
 import type { UploadedFile } from "../../../lib/readers";
 
 export const runtime = "nodejs";
@@ -26,12 +23,6 @@ export async function POST(request: Request) {
     return json({ error: "세션이 만료되었거나 잘못된 요청입니다. 페이지를 새로고침해 주세요." }, 403);
   }
 
-  const identity = await getIdentity(request);
-  const allowPaid = canSpendExtractQuota(identity);
-  if (!allowPaid && anthropicApiKey()) {
-    return json({ error: QUOTA_GATE_MESSAGE }, identity.verified ? 403 : 401);
-  }
-
   const ip = clientIp(request);
   const slot = takeExtractSlot(ip);
   if (!slot.ok) {
@@ -41,13 +32,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    return await runExtract(request, allowPaid);
+    return await runExtract(request);
   } finally {
     releaseExtractSlot(ip);
   }
 }
 
-async function runExtract(request: Request, allowPaid: boolean): Promise<Response> {
+async function runExtract(request: Request): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -84,7 +75,7 @@ async function runExtract(request: Request, allowPaid: boolean): Promise<Respons
   }
 
   try {
-    const result = await extractNotice(name, files, allowPaid);
+    const result = await extractNotice(name, files);
     if (!Object.keys(result.결과).length && result.skipped.length && !result.readText) {
       return json({ error: "읽을 수 있는 파일이 없습니다.", ...result }, 400);
     }
