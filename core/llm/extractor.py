@@ -1,6 +1,7 @@
 """분류·추출: 공고 파일 조각 → 사업유형 / NoticeConditions.
 
-- classify: 사업유형 + 근거. APPLY_INSPECTION이 아니면 추출하지 않는다.
+- analyze: 분류 + 추출을 요청 한 번에(화면·공고 찾기가 쓰는 기본 경로). 문서 입력 토큰을 한 번만 낸다.
+- classify: 사업유형 + 근거. APPLY_INSPECTION이 아니면 추출하지 않는다(따로 부를 때).
 - extract: ExtractOut(LLM) → NoticeConditions(코드 변환). 층수·연면적의 이하/미만, 날짜, 용도·구조 표준화는 코드가 한다.
 - 결과는 reviewed=False. 사람이 검수 후 저장한다.
 - 사용량은 data/logs/llm_usage.csv에 토큰·문서 해시만 남긴다.
@@ -22,7 +23,7 @@ from core.conditions import (
 )
 from core.llm import prompts, usage_log
 from core.llm.base import LLMProvider, Part, Usage, doc_hash
-from core.llm.schemas import ClassifyOut, ExtractOut
+from core.llm.schemas import AnalyzeOut, ClassifyOut, ExtractOut
 
 SELECTION_METHODS = {"심사", "선착순", "예산소진", "직권", "기타"}
 
@@ -31,7 +32,7 @@ SELECTION_METHODS = {"심사", "선착순", "예산소진", "직권", "기타"}
 class ClassifyResult:
     business_type: BusinessType
     evidence: str | None
-    reason: str
+    confidence: str
     has_repair_section: bool
     usage: Usage
 
@@ -49,10 +50,11 @@ class ExtractResult:
 
 
 def classify(parts: list[Part], provider: LLMProvider, log: bool = True) -> ClassifyResult:
-    out, usage = provider.generate_json(prompts.CLASSIFY_SYSTEM, parts, ClassifyOut)
+    # 마지막 조각 = 작업 지시. 그 앞(시스템 + 본문)은 추출과 똑같아 캐시가 이어진다
+    out, usage = provider.generate_json(prompts.SYSTEM, parts + [Part.of_text(prompts.CLASSIFY_TASK)], ClassifyOut)
     if log and provider.name != "mock":
         usage_log.record(usage, "classify", doc_hash(parts))
-    return ClassifyResult(BusinessType(out.business_type), out.evidence, out.reason, out.has_repair_section, usage)
+    return ClassifyResult(BusinessType(out.business_type), out.evidence, out.confidence, out.has_repair_section, usage)
 
 
 def _date(v: str | None, label: str, issues: list[str]) -> date | None:
@@ -82,15 +84,18 @@ def to_notice(out: ExtractOut, notice_id: str | None = None, business_type: Busi
         if getattr(f, "evidence", None):
             ev[name] = f.evidence
 
-    # 지역 → 시군구코드: 정확히 일치할 때만
+    # 지역 → 시군구코드. '수원시'처럼 일반구를 둔 시는 구 전체, 같은 이름이 여러 곳이면 고르지 않는다
     codes: list[str] = []
     gov = out.local_gov.value
     if gov:
-        p = gov.split(maxsplit=1)
-        m = regions.match_sigungu(p[0], p[1] if len(p) > 1 else "")
+        m = regions.resolve_local_gov(gov)
         codes = m["codes"]
-        if not codes:
-            issues.append(f"지자체 '{gov}'를 시군구코드로 찾지 못했습니다({m['kind']}). 직접 고르세요")
+        if m["kind"] == "ambiguous":
+            issues.append(f"지자체 '{gov}'가 여러 곳에 있습니다({', '.join(c[0] for c in m['candidates'][:6])}). 적용 시군구를 직접 고르세요")
+        elif not codes:
+            issues.append(f"지자체 '{gov}'를 시군구코드로 찾지 못했습니다. 적용 시군구를 직접 고르세요")
+    else:
+        issues.append("공고에서 지자체를 찾지 못했습니다. 적용 시군구를 직접 고르세요")
     keep("local_gov", out.local_gov)
 
     fl = parse_floor_text(out.floors_text.value) if out.floors_text.value else None
@@ -190,10 +195,22 @@ def to_notice(out: ExtractOut, notice_id: str | None = None, business_type: Busi
 
 
 def extract(parts: list[Part], provider: LLMProvider, notice_id: str | None = None, log: bool = True) -> ExtractResult:
-    with_hint = parts + [Part.of_text(prompts.EXTRACT_HINT)]
-    out, usage = provider.generate_json(prompts.EXTRACT_SYSTEM, with_hint, ExtractOut)
+    out, usage = provider.generate_json(prompts.SYSTEM, parts + [Part.of_text(prompts.EXTRACT_TASK)], ExtractOut)
     if log and provider.name != "mock":
         usage_log.record(usage, "extract", doc_hash(parts))
     res = to_notice(out, notice_id)
     res.usage = usage
     return res
+
+
+def analyze(parts: list[Part], provider: LLMProvider, notice_id: str | None = None, log: bool = True) -> tuple[ClassifyResult, ExtractResult | None]:
+    """분류 + 추출 한 번에. 안전점검 신청형이 아니면 ExtractResult는 None."""
+    out, usage = provider.generate_json(prompts.SYSTEM, parts + [Part.of_text(prompts.ANALYZE_TASK)], AnalyzeOut)
+    if log and provider.name != "mock":
+        usage_log.record(usage, "analyze", doc_hash(parts))
+    c = ClassifyResult(BusinessType(out.business_type), out.business_evidence, out.confidence, out.has_repair_section, usage)
+    if not c.is_apply_inspection:
+        return c, None
+    res = to_notice(out, notice_id)
+    res.usage = usage
+    return c, res

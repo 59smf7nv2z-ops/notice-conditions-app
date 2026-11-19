@@ -1,10 +1,12 @@
-"""업로드한 공고 파일 → LLM 요청 조각(Part).
+"""업로드한 공고 파일 → LLM 요청 조각(Part). 토큰을 아끼려고 글자로 읽을 수 있는 문서는 텍스트·마크다운으로 바꾼다.
 
-- HWP·HWPX는 Claude·Gemini 모두 직접 읽지 못한다 → 텍스트로 바꾼다.
-  기존 grok 웹앱(frontend_grok/lib/readers.ts)의 변환 방식을 옮기고, HWPX 표는 마크다운 표로 바꿨다.
-  HWP(바이너리)는 문단 텍스트만 뽑으므로 표 구조가 사라진다(셀 내용은 줄로 남음) → 표가 중요한 공고는 PDF 권장.
-- PDF·PNG·JPG는 원본 그대로 넘긴다. 리플릿처럼 여러 장이면 한 요청에 모두 넣는다.
-  업로드 파일 수와 만들어진 조각 수를 비교해 다르면 경고한다(예전 '리플릿 이미지 한 장 누락' 오류 재발 방지).
+- HWPX: 본문 + 표(마크다운). HWP(바이너리, olefile): 문단 텍스트만(표 구조는 사라지고 셀 내용은 줄로 남음).
+- PDF(pymupdf): 쪽마다 글자층을 읽어 본문 + 표(마크다운). 글자층이 없거나 깨진 쪽(스캔본)만 이미지로 바꾼다.
+- DOCX(python-docx): 문단·제목·표를 문서 순서대로. XLSX(openpyxl): 시트별 마크다운 표(계산된 값).
+- PNG·JPG와 스캔 쪽(pillow): 흑백(회색조)·대비 보정 후 긴 변 IMAGE_MAX_EDGE 이하로 줄인다.
+  세로로 긴 리플릿은 글자가 뭉개지지 않게 폭을 유지한 채 위아래로 잘라(겹침 포함) 여러 장으로 보낸다.
+  이미지 토큰은 대략 가로×세로/750이라 크기가 비용을 정한다. 회색조는 전송 용량을 줄이고 색 배경 대비를 높인다.
+- 업로드 파일 수와 만들어진 파일 수를 비교해 다르면 경고한다(예전 '리플릿 이미지 한 장 누락' 오류 재발 방지).
 - 파일당 8MB. 업로드 파일은 메모리에서만 처리하고 디스크에 쓰지 않는다.
 """
 
@@ -26,9 +28,21 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_UNCOMPRESSED = 16 * 1024 * 1024  # 압축 폭탄 방지
 MIN_TEXT = 150  # 이보다 적게 읽히면 도형·그림 위주 문서로 보고 PDF·이미지 변환을 권한다
 
-MIME_BY_EXT = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
-TEXT_EXTS = {".hwpx", ".hwp"}
-ACCEPTED = tuple(sorted(TEXT_EXTS | set(MIME_BY_EXT)))
+IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+TEXT_EXTS = {".hwpx", ".hwp", ".docx", ".xlsx", ".txt"}
+PDF_EXTS = {".pdf"}
+ACCEPTED = tuple(sorted(TEXT_EXTS | IMAGE_EXTS | PDF_EXTS))
+
+# 이미지: 긴 변 1568px·약 1.15MP가 이전 세대 모델의 처리 한도라 이보다 크게 보내도 서버에서 줄인다.
+# 한 장(조각)당 약 1,500 토큰. 더 큰 해상도를 받는 모델에서 작은 글씨가 안 읽히면 .env LLM_IMAGE_MAX_EDGE로 올린다.
+IMAGE_MAX_EDGE = 1568
+IMAGE_MAX_PIXELS = 1_150_000
+TILE_OVERLAP = 48  # 잘린 경계의 글자 줄이 양쪽 조각에 다 들어가게
+MAX_TILES_PER_IMAGE = 8
+PDF_RENDER_DPI = 150  # 스캔 쪽을 이미지로 바꿀 때(A4 폭 약 1240px)
+PDF_MAX_PAGES = 30
+PAGE_MIN_TEXT = 40  # 쪽 글자층이 이보다 적으면 스캔 쪽으로 본다
+XLSX_MAX_ROWS = 300
 
 
 @dataclass
@@ -82,10 +96,21 @@ def _table_markdown(tbl: ET.Element) -> list[str]:
             cells.append(text.replace("|", "／"))
         if cells:
             rows.append(cells)
+    return md_table(rows)
+
+
+def _cell(v) -> str:
+    return " ".join(str(v).split()).replace("|", "／") if v is not None else ""
+
+
+def md_table(rows: list[list]) -> list[str]:
+    """2차원 값 → 마크다운 표 줄. 빈 행과 끝의 빈 열은 버린다(토큰 절약)."""
+    rows = [[_cell(c) for c in r] for r in rows]
+    rows = [r for r in rows if any(r)]
     if not rows:
         return []
-    width = max(len(r) for r in rows)
-    rows = [r + [""] * (width - len(r)) for r in rows]
+    width = max((max((i + 1 for i, c in enumerate(r) if c), default=0) for r in rows), default=0)
+    rows = [(r + [""] * width)[:width] for r in rows]
     lines = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * width]
     lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
     return lines
@@ -190,7 +215,203 @@ def read_hwp(data: bytes) -> str:
     return "\n".join(p for p in paras if p.strip())
 
 
+# ---------------------------------------------------------------- DOCX · XLSX · TXT
+
+
+def read_docx(data: bytes) -> str:
+    """문단·제목·표를 문서 순서대로. 병합 셀은 python-docx가 같은 셀을 반복해 주므로 이웃 중복을 지운다."""
+    import docx
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    d = docx.Document(io.BytesIO(data))
+    lines: list[str] = []
+    for el in d.element.body.iterchildren():
+        name = _local(el.tag)
+        if name == "p":
+            p = Paragraph(el, d)
+            text = p.text.strip()
+            if not text:
+                continue
+            style = (p.style.name if p.style is not None else "") or ""
+            m = re.match(r"(?:Heading|제목)\s*(\d)", style)
+            lines.append(("#" * min(int(m.group(1)), 4) + " " if m else "") + text)
+        elif name == "tbl":
+            rows = []
+            for r in Table(el, d).rows:
+                cells: list[str] = []
+                for c in r.cells:
+                    t = c.text
+                    if not cells or cells[-1] != t:
+                        cells.append(t)
+                rows.append(cells)
+            lines += md_table(rows) + [""]
+    return "\n".join(lines).strip()
+
+
+def read_xlsx(data: bytes) -> str:
+    """시트별 마크다운 표. 수식은 저장된 계산값을 쓴다(data_only)."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    out: list[str] = []
+    try:
+        for ws in wb.worksheets:
+            rows = []
+            for i, r in enumerate(ws.iter_rows(values_only=True)):
+                if i >= XLSX_MAX_ROWS:
+                    out.append(f"(시트 '{ws.title}' {XLSX_MAX_ROWS}행 이후 생략)")
+                    break
+                rows.append(list(r))
+            table = md_table(rows)
+            if table:
+                out += [f"## 시트: {ws.title}"] + table + [""]
+    finally:
+        wb.close()
+    return "\n".join(out).strip()
+
+
+def read_txt(data: bytes) -> str:
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            return data.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace").strip()
+
+
+# ---------------------------------------------------------------- 이미지 (pillow)
+
+
+def _image_limits() -> tuple[int, int]:
+    import os
+
+    try:
+        edge = int(os.environ.get("LLM_IMAGE_MAX_EDGE") or IMAGE_MAX_EDGE)
+    except ValueError:
+        edge = IMAGE_MAX_EDGE
+    edge = max(800, min(edge, 2576))
+    return edge, max(IMAGE_MAX_PIXELS, int(IMAGE_MAX_PIXELS * (edge / IMAGE_MAX_EDGE) ** 2))
+
+
+def prepare_image(data: bytes) -> list[bytes]:
+    """사진·스캔 → 회색조 PNG 조각들.
+
+    1) 휴대폰 사진의 회전 정보(EXIF)를 반영  2) 회색조 + 자동 대비(위아래 1% 잘라 배경 얼룩 정리).
+       글자가 끊길 수 있어 완전 흑백(이진화)은 하지 않는다.
+    3) 폭을 긴 변 한도 이하로 줄이고(확대는 안 함), 한 조각 픽셀 한도를 넘으면 위아래로 겹쳐 자른다.
+    """
+    from PIL import Image, ImageOps
+
+    edge, max_px = _image_limits()
+    with Image.open(io.BytesIO(data)) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+            im = Image.alpha_composite(bg, im)
+        im = ImageOps.autocontrast(im.convert("L"), cutoff=1)
+    w, h = im.size
+    if w > edge:  # 폭을 한도까지 줄인다(세로 길이는 아래에서 조각으로 나눔)
+        im = im.resize((edge, max(1, round(h * edge / w))), Image.Resampling.LANCZOS)
+    w, h = im.size
+    if w * h > max_px and h <= w:  # 가로형은 자르지 않고 비율 유지 축소
+        s = (max_px / (w * h)) ** 0.5
+        im = im.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.LANCZOS)
+        w, h = im.size
+    tile_h = max(200, min(edge, max_px // max(w, 1)))
+    if h > tile_h:
+        n = -(-(h - TILE_OVERLAP) // (tile_h - TILE_OVERLAP))
+        if n > MAX_TILES_PER_IMAGE:  # 너무 길면 조각 수를 지키려고 전체를 줄인다
+            s = (MAX_TILES_PER_IMAGE * (tile_h - TILE_OVERLAP) + TILE_OVERLAP) / h
+            im = im.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.LANCZOS)
+            w, h = im.size
+            tile_h = max(200, min(edge, max_px // max(w, 1)))
+    out: list[bytes] = []
+    top = 0
+    while True:
+        bottom = min(h, top + tile_h)
+        buf = io.BytesIO()
+        im.crop((0, top, w, bottom)).save(buf, "PNG", optimize=True)
+        out.append(buf.getvalue())
+        if bottom >= h:
+            break
+        top = bottom - TILE_OVERLAP
+    return out
+
+
+# ---------------------------------------------------------------- PDF (pymupdf)
+
+
+def _garbled(text: str) -> bool:
+    """글꼴에 유니코드 정보가 없어 깨진 글자층(�, 사용자 정의 영역 문자)이 많은지."""
+    if not text:
+        return False
+    bad = sum(1 for ch in text if ch == "�" or 0xE000 <= ord(ch) <= 0xF8FF)
+    return bad / len(text) > 0.05
+
+
+@dataclass
+class PdfRead:
+    text: str  # 글자층을 읽은 쪽의 본문·표(마크다운). 쪽 표시 포함
+    scanned_pages: list[int]  # 이미지로 보내야 하는 쪽(1부터)
+    images: list[tuple[int, list[bytes]]]  # (쪽, 이미지 조각)
+    page_count: int
+
+
+def read_pdf(data: bytes) -> PdfRead:
+    import pymupdf
+
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        if doc.needs_pass:
+            raise ValueError("암호가 걸린 PDF입니다")
+        pages_out: list[str] = []
+        scanned: list[int] = []
+        images: list[tuple[int, list[bytes]]] = []
+        n = min(doc.page_count, PDF_MAX_PAGES)
+        for i in range(n):
+            page = doc[i]
+            try:
+                tables = page.find_tables().tables
+            except Exception:  # noqa: BLE001 - 표 찾기 실패는 본문만으로
+                tables = []
+            rects = [pymupdf.Rect(t.bbox) for t in tables]
+            items: list[tuple[float, float, list[str]]] = []
+            for b in page.get_text("blocks", sort=True):
+                x0, y0, x1, y1, text, _, btype = b[:7]
+                if btype != 0 or not text.strip():
+                    continue
+                r = pymupdf.Rect(x0, y0, x1, y1)
+                if any(r.intersect(t).get_area() > 0.5 * r.get_area() for t in rects if r.get_area() > 0):
+                    continue
+                items.append((y0, x0, [" ".join(text.split())]))
+            for t, r in zip(tables, rects):
+                try:
+                    # Table.extract()는 띄어쓰기를 잃는 경우가 있어("3 or less" → "3orless") 칸 영역 글자를 직접 읽는다
+                    rows = [[page.get_textbox(c) if c else "" for c in row.cells] for row in t.rows]
+                except Exception:  # noqa: BLE001
+                    continue
+                items.append((r.y0, r.x0, md_table(rows) + [""]))
+            items.sort(key=lambda it: (round(it[0]), it[1]))
+            body = "\n".join(line for _, _, ls in items for line in ls).strip()
+            if len(body) < PAGE_MIN_TEXT or _garbled(body):
+                scanned.append(i + 1)
+                pix = page.get_pixmap(dpi=PDF_RENDER_DPI, colorspace=pymupdf.csGRAY)
+                images.append((i + 1, prepare_image(pix.tobytes("png"))))
+                continue
+            pages_out.append(f"--- {i + 1}쪽 ---\n{body}")
+        if doc.page_count > PDF_MAX_PAGES:
+            pages_out.append(f"(전체 {doc.page_count}쪽 중 {PDF_MAX_PAGES}쪽까지만 읽음)")
+        return PdfRead("\n\n".join(pages_out), scanned, images, doc.page_count)
+    finally:
+        doc.close()
+
+
 # ---------------------------------------------------------------- 묶음 처리
+
+
+TEXT_READERS = {".hwpx": read_hwpx, ".hwp": read_hwp, ".docx": read_docx, ".xlsx": read_xlsx, ".txt": read_txt}
 
 
 def to_parts(files: list[UploadedFile]) -> Preprocessed:
@@ -203,13 +424,36 @@ def to_parts(files: list[UploadedFile]) -> Preprocessed:
         if len(f.data) > MAX_FILE_BYTES:
             res.skipped.append(f"{name}: 파일이 8MB를 넘습니다")
             continue
-        if ext in MIME_BY_EXT:
-            res.parts.append(Part.of_text(f"[파일: {name}]", name=name))
-            res.parts.append(Part.of_bytes(f.data, MIME_BY_EXT[ext], name=name))
-            continue
-        if ext in TEXT_EXTS:
+        if ext in IMAGE_EXTS:
             try:
-                text = read_hwpx(f.data) if ext == ".hwpx" else read_hwp(f.data)
+                tiles = prepare_image(f.data)
+            except Exception as e:  # noqa: BLE001
+                res.skipped.append(f"{name}: 이미지를 열지 못했습니다({e})")
+                continue
+            label = f"[파일: {name}]" + (f" (세로로 {len(tiles)}조각, 경계 겹침)" if len(tiles) > 1 else "")
+            res.parts.append(Part.of_text(label, name=name))
+            res.parts += [Part.of_bytes(t, "image/png", name=name) for t in tiles]
+            continue
+        if ext in PDF_EXTS:
+            try:
+                pdf = read_pdf(f.data)
+            except Exception as e:  # noqa: BLE001
+                res.skipped.append(f"{name}: 읽기 실패({e})")
+                continue
+            if pdf.text:
+                res.parts.append(Part.of_text(f"[파일: {name}]\n{pdf.text}", name=name))
+                previews.append(pdf.text[:2000])
+            for page_no, tiles in pdf.images:
+                res.parts.append(Part.of_text(f"[파일: {name} {page_no}쪽 이미지(글자층 없음)]", name=name))
+                res.parts += [Part.of_bytes(t, "image/png", name=name) for t in tiles]
+            if pdf.scanned_pages and pdf.text:
+                res.warnings.append(f"{name}: {', '.join(map(str, pdf.scanned_pages))}쪽은 글자층이 없어 이미지로 보냅니다")
+            if pdf.page_count > PDF_MAX_PAGES:
+                res.warnings.append(f"{name}: {pdf.page_count}쪽 중 앞 {PDF_MAX_PAGES}쪽만 보냅니다")
+            continue
+        if ext in TEXT_READERS:
+            try:
+                text = TEXT_READERS[ext](f.data)
             except Exception as e:  # noqa: BLE001 - 파일 하나 실패는 건너뛰고 알린다
                 res.skipped.append(f"{name}: 읽기 실패({e}). PDF나 이미지로 저장해 올려 주세요")
                 continue

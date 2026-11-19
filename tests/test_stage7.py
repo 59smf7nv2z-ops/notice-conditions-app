@@ -40,61 +40,133 @@ def test_naver_not_configured(monkeypatch):
     assert "NAVER_CLIENT_ID" in str(e.value) and "NAVER_CLIENT_SECRET" not in str(e.value)
 
 
-@responses.activate
-def test_hub_style_from_official_guide(monkeypatch):
+def web_item(title, url, desc="소규모 노후 건축물 안전점검 신청"):
+    return {"title": title, "link": url, "description": desc}
+
+
+@pytest.fixture
+def hub_env(monkeypatch):
     monkeypatch.setattr(nh, "load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("NAVER_API_STYLE", "hub")
     monkeypatch.setenv("NAVER_CLIENT_ID", "hub-id")
     monkeypatch.setenv("NAVER_CLIENT_SECRET", "hub-secret")
-    monkeypatch.delenv("NAVER_HUB_WEB_URL", raising=False)
-    monkeypatch.delenv("NAVER_HUB_NEWS_URL", raising=False)
+    for k in ("NAVER_HUB_WEB_URL", "NAVER_HUB_NEWS_URL"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@responses.activate
+def test_hub_style_web_and_news(hub_env):
+    responses.get(nh.NAVER_HUB["web_url"], json={"items": [web_item("2026년 <b>소규모 노후 건축물</b> 안전점검 신청 안내", "https://www.jongno.go.kr/notice/1")]})
     # 가이드 응답 예시 형태
     responses.get(nh.NAVER_HUB["news_url"], json={
         "lastBuildDate": "Thu, 11 Jun 2026 19:03:00 +0900", "total": 1, "start": 1, "display": 1,
         "items": [news_item("<b>종로구</b> 노후건축물 안전점검 신청", "http://www.example-news.co.kr/a", "Thu, 11 Jun 2026 18:34:00 +0900")],
     })
-    cands, calls = nh.search_candidates("서울특별시 종로구", TODAY)
-    assert calls == 3  # 웹문서 엔드포인트가 없어 뉴스만(쿼리 3개)
+    cands, calls = nh.search_candidates("11110", TODAY)
+    assert calls == 3  # 웹문서 2 + 뉴스 1
+    urls = [c.request.url for c in responses.calls]
+    assert urls[0].startswith("https://naverapihub.apigw.ntruss.com/search/v1/webkr?")
+    assert urls[2].startswith("https://naverapihub.apigw.ntruss.com/search/v1/news?") and "sort=sim" in urls[2]
     req = responses.calls[0].request
-    assert req.url.startswith("https://naverapihub.apigw.ntruss.com/search/v1/news?")
     assert req.headers["X-NCP-APIGW-API-KEY-ID"] == "hub-id" and req.headers["X-NCP-APIGW-API-KEY"] == "hub-secret"
-    assert "format=json" in req.url and "sort=date" in req.url
-    assert cands[0].date == "2026-06-11" and cands[0].title == "종로구 노후건축물 안전점검 신청"
+    assert "format=json" in req.url
+    # 구청 사이트(jongno.go.kr = 종로) 올해 신청 안내가 뉴스보다 앞
+    assert [c.url for c in cands] == ["https://www.jongno.go.kr/notice/1", "http://www.example-news.co.kr/a"]
+    assert cands[0].year == 2026 and cands[0].score >= nh.AUTO_MIN_SCORE
+    assert cands[1].date == "2026-06-11" and cands[1].title == "종로구 노후건축물 안전점검 신청"
 
 
 @responses.activate
-def test_hub_error_code_in_message(monkeypatch):
-    monkeypatch.setattr(nh, "load_dotenv", lambda *a, **k: None)
-    monkeypatch.setenv("NAVER_API_STYLE", "hub")
-    monkeypatch.setenv("NAVER_CLIENT_ID", "a")
-    monkeypatch.setenv("NAVER_CLIENT_SECRET", "b")
-    responses.get(nh.NAVER_HUB["news_url"], status=400, json={"errorMessage": "Invalid display value", "errorCode": "SE02"})
+def test_hub_error_code_in_message(hub_env):
+    responses.get(nh.NAVER_HUB["web_url"], status=400, json={"errorMessage": "Invalid display value", "errorCode": "SE02"})
     with pytest.raises(nh.HunterError) as e:
         nh.search_candidates("서울특별시 종로구", TODAY)
     assert "SE02" in str(e.value)
 
 
 @responses.activate
-def test_search_candidates_headers_sort_and_dedupe(naver_env):
+def test_search_candidates_developers_headers_and_dedupe(naver_env):
     url_a = "https://www.jongno.go.kr/notice/1"
+    responses.get(nh.NAVER_DEVELOPERS["web_url"], json={"items": [web_item("종로구 소규모 노후건축물 안전점검 공고", url_a)]})
     responses.get(nh.NAVER_DEVELOPERS["news_url"], json={"items": [news_item("<b>종로구</b> 소규모 노후건축물 점검", "https://news.example.com/a")]})
-    responses.get(nh.NAVER_DEVELOPERS["web_url"], json={"items": [{"title": "종로구 공고", "link": url_a, "description": ""}]})
     cands, calls = nh.search_candidates("서울특별시 종로구", TODAY)
-    assert calls == 6  # 쿼리 3개 × 뉴스·웹
-    assert [c.url for c in cands] == ["https://news.example.com/a", url_a]  # 중복 제거, 날짜 최신순
+    assert calls == 3
+    assert [c.url for c in cands] == [url_a, "https://news.example.com/a"]  # 두 웹 검색의 같은 글은 하나로
     first = responses.calls[0].request
     assert first.headers["X-Naver-Client-Id"] == "id" and first.headers["X-Naver-Client-Secret"] == "secret"
-    assert "sort=date" in first.url  # 뉴스는 최신순
-    assert "sort=" not in responses.calls[1].request.url  # 웹문서는 정렬 파라미터 없음
-    assert cands[0].title == "종로구 소규모 노후건축물 점검" and cands[0].date == "2026-11-15"
-    assert cands[0].source_type == "NEWS" and cands[1].source_type == "OFFICIAL_NOTICE"
+    assert "sort=" not in first.url  # 웹문서는 정렬 파라미터 없음
+    assert cands[1].source_type == "NEWS" and cands[0].source_type == "OFFICIAL_NOTICE"
 
 
 @responses.activate
 def test_search_auth_error(naver_env):
-    responses.get(nh.NAVER_DEVELOPERS["news_url"], status=401, json={"errorMessage": "x"})
+    responses.get(nh.NAVER_DEVELOPERS["web_url"], status=401, json={"errorMessage": "x"})
     with pytest.raises(nh.HunterError):
         nh.search_candidates("서울특별시 종로구", TODAY)
+
+
+def test_search_target_names():
+    assert nh.search_target("30140") == nh.SearchTarget("대전 중구", "중구", "대전")  # 중구는 여러 곳 → 시·도 약칭
+    assert nh.search_target("41113").query_name == "수원시"  # 일반구 → 시 단위 공고
+    assert nh.search_target("11110") == nh.SearchTarget("종로구", "종로")
+    assert nh.search_target("36110").query_name == "세종"
+    qs = nh.queries_for(nh.search_target("30140"), TODAY)
+    assert [k for k, _, _ in qs] == ["web", "web", "news"] and "2026년 대전 중구" in qs[1][1]
+
+
+def test_romanize_and_host_match():
+    assert [nh.romanize(w) for w in ("종로", "중구", "고성", "수원", "신라")] == ["jongno", "junggu", "goseong", "suwon", "silla"]
+    t = nh.search_target("30140")
+    assert nh._host_is_region("www.djjunggu.go.kr", t) and not nh._host_is_region("www.bsjunggu.go.kr", t)
+    assert nh._host_is_region("www.suwon.go.kr", nh.search_target("41113"))
+
+
+def test_score_filters_region_noise_and_ranks():
+    t = nh.search_target("30140")
+    C = lambda title, url, kind="web", d="", snip="": nh.Candidate(title, url, nh.urlparse(url).netloc, d, kind, snip)  # noqa: E731
+    cands = [
+        C("2026년 소규모 노후 건축물 안전점검 신청 안내", "https://www.djjunggu.go.kr/bbs/1"),  # 지역 사이트(주소로 확인)
+        C("대전 중구, 소규모 노후건축물 안전점검 실시", "https://news.example.com/articleView.html?idxno=1", d="2025-04-08"),
+        C("2026년 소규모 노후 건축물 안전점검 신청 안내", "https://www.bsjunggu.go.kr/bbs/9"),  # 부산 중구 → 제외
+        C("울산 중구 소규모 노후건축물 안전점검", "https://news.example.com/b", "news", "2026-05-01"),  # 다른 지역 → 제외
+        C("대전 중구 건축물관리점검기관 모집 공고 노후 건축물 점검", "https://www.djjunggu.go.kr/bbs/2"),  # 점검기관 모집 → 제외
+        C("2024년 대전 중구 소규모 노후건축물 점검 결과", "https://www.djjunggu.go.kr/bbs/3"),
+    ]
+    out = nh.score_candidates(cands, t, TODAY)
+    assert [c.url for c in out] == ["https://www.djjunggu.go.kr/bbs/1", "https://news.example.com/articleView.html?idxno=1", "https://www.djjunggu.go.kr/bbs/3"]
+    assert out[0].score == 4 + 3 + 2 and out[1].kind == "news"  # 웹문서에 나온 기사는 뉴스로
+    assert nh.auto_pick(out) == [out[0]]
+
+
+def test_file_links_not_auto_picked():
+    c = nh.Candidate("2026년 노후건축물 안전점검 공고문.hwp", "https://www.suwon.go.kr/component/file/ND_fileDownload.do?id=1", "www.suwon.go.kr", "", "web", score=9)
+    assert nh.is_file_link(c) and nh.auto_pick([c]) == []
+
+
+@responses.activate
+def test_hunt_auto_extracts_top_candidate(hub_env, monkeypatch):
+    monkeypatch.setattr(nh, "load_notices", lambda: [])
+    url = "https://www.djjunggu.go.kr/bbs/1"
+    responses.get(nh.NAVER_HUB["web_url"], json={"items": [web_item("2026년 소규모 노후 건축물 안전점검 신청 안내", url)]})
+    responses.get(nh.NAVER_HUB["news_url"], json={"items": []})
+    responses.get("https://www.djjunggu.go.kr/robots.txt", status=404)
+    long_page = PAGE.replace("</body>", "<p>" + "접수기간 2026. 7. 1. ~ 7. 31. 방문 또는 우편 신청. " * 5 + "</p></body>")
+    responses.get(url, body=long_page, content_type="text/html; charset=utf-8")
+    r = nh.hunt("30140", "대전광역시 중구", TODAY, has_ordinance=False, auto_provider=MockProvider())
+    assert r.stage == "search" and r.auto and r.auto.extract is not None
+    n = r.auto.extract.notice
+    assert n.source_url == url and n.reviewed is False and n.sigungu_codes == ["30140"] and not r.auto.region_mismatch
+    # 다른 지역을 고른 상태에서 대전 중구 글이 추출되면 불일치로 표시
+    r2 = nh.hunt("11110", "서울특별시 종로구", TODAY, has_ordinance=False, auto_provider=MockProvider())
+    assert r2.auto is None or r2.auto.extract is None or r2.auto.region_mismatch
+
+
+@responses.activate
+def test_auto_extract_skips_blocked_pages(hub_env):
+    blocked = nh.Candidate("2026년 소규모 노후 건축물 안전점검 신청", "https://gu.example.go.kr/a", "gu.example.go.kr", "", "web", score=9)
+    responses.get("https://gu.example.go.kr/robots.txt", body="User-agent: *\nDisallow: /\n")
+    a = nh.auto_extract([blocked], MockProvider())
+    assert a.extract is None and a.skipped and "robots" in a.skipped[0][1]
 
 
 def test_hunt_without_keys_falls_back(monkeypatch):
@@ -111,6 +183,18 @@ def test_hunt_prefers_reviewed(monkeypatch, tmp_path):
     monkeypatch.setattr(nh, "load_notices", lambda: [n])
     r = nh.hunt("11110", "서울특별시 종로구", TODAY, has_ordinance=True)
     assert r.stage == "reviewed" and r.notices == [n] and r.calls == 0
+
+
+def test_hunt_searches_again_when_reviewed_notice_closed(monkeypatch):
+    from core.conditions import BusinessType, NoticeConditions
+
+    old = NoticeConditions(notice_id="x", sigungu_codes=["11110"], business_type=BusinessType.APPLY_INSPECTION, reviewed=True,
+                           apply_start=date(2025, 3, 1), apply_end=date(2025, 3, 31))
+    monkeypatch.setattr(nh, "load_notices", lambda: [old])
+    monkeypatch.setattr(nh, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("NAVER_CLIENT_ID", raising=False)
+    r = nh.hunt("11110", "서울특별시 종로구", TODAY, has_ordinance=True)
+    assert r.stage == "none" and "네이버 검색" in r.message  # 마감된 공고만 있으면 새 공고를 찾으러 간다
 
 
 # ---------------------------------------------------------------- 본문 가져오기

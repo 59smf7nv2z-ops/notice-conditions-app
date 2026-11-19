@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from app import map_view, sidebar, state, tab_letters, tab_notice, tab_region  # noqa: E402
+from app import map_view, sidebar, state, tab_hunt, tab_letters, tab_notice, tab_region  # noqa: E402
 
 SECTIONS = {
     "notice": "① 공고문 분석 & 조건",
@@ -34,6 +34,7 @@ st.title("소규모 노후건축물 안전점검 지원 대상 선별")
 st.caption("결과는 '자격 후보'입니다. 최종 선정은 담당자·위원회가 합니다.")
 
 ctx = sidebar.render()
+tab_hunt.auto_run(ctx)  # 지역을 고르면 공고 자동 검색·추출(시군구마다 한 번)
 section = st.segmented_control(
     "화면", list(SECTIONS), format_func=SECTIONS.get, default="region", key="section", label_visibility="collapsed"
 ) or "region"

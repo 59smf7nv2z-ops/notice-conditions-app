@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from core.llm.base import Part, T, Usage
 from core.llm.schemas import (
+    AnalyzeOut,
     BoolField,
     ClassifyOut,
     ExtractOut,
@@ -51,6 +52,7 @@ def sample_extract() -> ExtractOut:
         apply_method=_s("방문 또는 온라인 신청", "건축물 소유자가 방문 또는 온라인으로 신청한다."),
         documents=ListField(value=["신청서", "건축물대장"], evidence="제출서류: 신청서, 건축물대장"),
         source_type="OFFICIAL_NOTICE",
+        confidence="high",
     )
 
 
@@ -67,9 +69,11 @@ class MockProvider:
             # 본문이 있는 텍스트 조각(HWP·HWPX 변환문)의 앞부분을 근거 자리에 둔다
             text = next((p.text.split("\n", 1)[1] for p in parts if p.text and "\n" in p.text), "")
             snippet = " ".join(text.split())[:80] or None
-            return ClassifyOut(business_type="APPLY_INSPECTION", evidence=snippet, reason="샘플 결과(키 없음)", has_repair_section=False), usage
+            return ClassifyOut(business_type="APPLY_INSPECTION", evidence=snippet, has_repair_section=False, confidence="high"), usage
         if schema is ExtractOut:
             return sample_extract(), usage
+        if schema is AnalyzeOut:
+            return AnalyzeOut(business_type="APPLY_INSPECTION", business_evidence=None, has_repair_section=False, **sample_extract().model_dump()), usage
         raise NotImplementedError(f"MockProvider: {schema.__name__} 샘플 없음")
 
     def generate_text(self, system: str, prompt: str) -> tuple[str, Usage]:

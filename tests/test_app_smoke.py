@@ -46,6 +46,8 @@ def fakes(monkeypatch):
     monkeypatch.setattr(boundaries, "sigungu_boundary", lambda *a, **k: square)
     monkeypatch.setattr(boundaries, "emd_boundaries", lambda *a, **k: square)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    from core import notice_hunter
+    monkeypatch.setattr(notice_hunter, "search_candidates", lambda *a, **k: ([], 0))  # 네이버 검색 호출 없음
     return calls
 
 
@@ -110,3 +112,64 @@ def test_missing_building_key_shows_error(fakes, monkeypatch):
     at.run()
     assert not at.exception
     assert any("BUILDING_API_KEY" in e.value for e in at.error)
+
+
+def test_notice_region_applied_to_sidebar_filter(fakes):
+    """공고 지역(수원시 = 구 4개)을 예약하면 시·도, 시·군·구, 법정동 전체 선택이 바뀐다."""
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.session_state["pending_region"] = ["41111", "41113", "41115", "41117"]
+    at.run()
+    assert not at.exception
+    assert at.selectbox(key="sb-sido").value == "경기도"
+    assert at.selectbox(key="sb-sgg").value == "수원시 장안구"
+    assert at.checkbox(key="all-41111").value is True
+
+
+def test_upload_draft_shows_period_warning_and_region(fakes):
+    from datetime import date
+
+    from app import sidebar  # noqa: F401  (화면 모듈 불러오기 확인)
+    from core.conditions import NoticeConditions
+
+    n = NoticeConditions(notice_id="daejeon-test", local_gov="대전광역시 중구", sigungu_codes=["30140"],
+                         apply_start=date(2026, 9, 1), apply_end=date(2026, 9, 30), min_years=30)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.session_state["section"] = "notice"
+    at.session_state["draft"] = {"notice": n, "issues": [], "classify": {"repair": False}, "provider": "mock:mock",
+                                 "usage": "", "region": "공고 지역(대전광역시 중구)을 검색 필터에 적용했습니다"}
+    at.session_state["pending_region"] = ["30140"]
+    at.run()
+    assert not at.exception
+    warnings = " ".join(w.value for w in at.warning)
+    if date.today() > date(2026, 9, 30):
+        assert "사업기간 아님" in warnings
+    assert any("검색 필터에 적용" in i.value for i in at.info)
+    assert at.selectbox(key="sb-sgg").value == "중구" and at.selectbox(key="sb-sido").value == "대전광역시"
+
+
+def test_auto_hunt_opens_draft_with_url_and_selects_it(fakes, monkeypatch):
+    """지역을 고르면 찾은 공고가 바로 추출되어: 위에 인터넷 주소, 사이드바 '공고'에 초안 선택, 법정동 전체."""
+    from core import notice_hunter as nh
+    from core.llm import extractor
+    from core.llm.base import Part
+    from core.llm.mock import MockProvider
+
+    url = "https://www.jongno.go.kr/notice/1"
+    c, r = extractor.analyze([Part.of_text("공고")], MockProvider(), log=False)
+    r.notice = r.notice.model_copy(update={"source_url": url, "sigungu_codes": ["11110"], "notice_id": "jongno-auto"})
+    cand = nh.Candidate("2026년 소규모 노후 건축물 안전점검 신청 안내", url, "www.jongno.go.kr", "", "web", score=9)
+    res = nh.HuntResult("search", candidates=[cand], auto=nh.AutoExtract(candidate=cand, classify=c, extract=r))
+    seen = []
+    monkeypatch.setattr(nh, "hunt", lambda *a, **k: seen.append(a[0]) or res)
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    assert not at.exception
+    assert seen == ["11110"]  # 시군구마다 한 번
+    top = " ".join(x.value for x in at.success) + " ".join(x.value for x in at.warning)
+    assert url in top
+    assert at.selectbox(key="notice-11110-False").value == "jongno-auto"
+    assert at.checkbox(key="all-11110").value is True
+    at.run()
+    assert seen == ["11110"]  # 다시 그려도 다시 찾지 않음

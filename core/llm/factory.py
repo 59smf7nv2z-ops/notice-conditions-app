@@ -1,4 +1,5 @@
 """공급자 선택: .env의 LLM_PROVIDER=claude|gemini|mock, LLM_MODEL_EXTRACT, LLM_MODEL_WRITE.
+claude일 때 LLM_MODEL_FALLBACK(예: claude-sonnet-5-5)이 있으면 실패·확신 낮음에 그 모델로 다시 한다.
 
 모델명은 자주 바뀌므로 코드에 쓰지 않는다. 키나 모델명이 없으면 MockProvider(샘플 결과)로 돌아간다.
 """
@@ -49,9 +50,16 @@ def get_provider(task: str = "extract", provider: str | None = None):
     if st.is_mock:
         return MockProvider(reason=st.reason)
     if st.name == "claude":
-        from core.llm.claude import ClaudeProvider
+        from core.llm.claude import ClaudeProvider, normalize_model
 
-        return ClaudeProvider(st.model, api_key=os.environ["ANTHROPIC_API_KEY"].strip())
+        key = os.environ["ANTHROPIC_API_KEY"].strip()
+        primary = ClaudeProvider(st.model, api_key=key)
+        fb = normalize_model(os.environ.get("LLM_MODEL_FALLBACK") or "")
+        if fb and fb != primary.model:
+            from core.llm.fallback import FallbackProvider
+
+            return FallbackProvider(primary, ClaudeProvider(fb, api_key=key))
+        return primary
     from core.llm.gemini import GeminiProvider
 
     return GeminiProvider(st.model, api_key=os.environ["GEMINI_API_KEY"].strip())

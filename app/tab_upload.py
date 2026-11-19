@@ -12,8 +12,9 @@ import streamlit as st
 from core import regions
 from core.conditions import BUSINESS_TYPE_LABEL, Contact, NoticeConditions
 from core.llm import extractor, factory
-from core.llm.base import LLMError
+from core.llm.base import LLMError, usage_summary
 from core.llm.preprocess import ACCEPTED, UploadedFile, to_parts
+from app import sidebar
 from core.notices import save_notice
 
 TRI = {"불명": None, "예": True, "아니오": False}
@@ -67,24 +68,26 @@ def _run(files) -> None:
         return
     provider = factory.get_provider("extract")
     try:
-        with st.spinner("사업유형 분류 중"):
-            c = extractor.classify(pre.parts, provider)
-        if not c.is_apply_inspection:
+        with st.spinner("사업유형 분류·조건 추출 중"):
+            c, r = extractor.analyze(pre.parts, provider)  # 한 번 호출로 분류 + 추출
+        if r is None:
             st.session_state.pop("draft", None)
             st.warning(f"이 공고는 '{BUSINESS_TYPE_LABEL[c.business_type]}'로 분류되어 조건을 추출하지 않습니다.")
-            st.markdown(f"**근거** {c.evidence or '(인용 없음)'}  \n**이유** {c.reason}")
+            st.markdown(f"**근거** {c.evidence or '(인용 없음)'}  \n**확신도** {c.confidence}")
+            if c.usage.note:
+                st.caption(c.usage.note)
             return
-        with st.spinner("조건 추출 중"):
-            r = extractor.extract(pre.parts, provider)
     except LLMError as e:
         st.error(str(e))
         return
+    region_msg = sidebar.apply_region(r.notice.sigungu_codes, r.notice.local_gov or "")
     st.session_state["draft"] = {
+        "region": region_msg,
         "notice": r.notice,
         "issues": r.issues,
-        "classify": {"evidence": c.evidence, "reason": c.reason, "repair": c.has_repair_section},
-        "provider": f"{provider.name}:{provider.model}",
-        "usage": (r.usage.input_tokens + c.usage.input_tokens, r.usage.output_tokens + c.usage.output_tokens) if r.usage else None,
+        "classify": {"evidence": c.evidence, "confidence": c.confidence, "repair": c.has_repair_section},
+        "provider": f"{provider.name}:{c.usage.model}",
+        "usage": usage_summary([c.usage]),
     }
     st.rerun()
 
@@ -97,8 +100,17 @@ def _editor(draft: dict) -> None:
     n: NoticeConditions = draft["notice"]
     st.markdown(
         f"**추출 결과** · {draft['provider']} · :orange-badge[미검수]"
-        + (f" · 토큰 입력 {draft['usage'][0]:,} / 출력 {draft['usage'][1]:,}" if draft.get("usage") else "")
+        + (f" · {draft['usage']}" if draft.get("usage") else "")
     )
+    state, msg = n.period_status(date.today())
+    if state == "OPEN":
+        st.success(msg)
+    else:
+        st.warning(("⚠️ 접수기간 확인 불가 · " if state == "UNKNOWN" else "⚠️ 사업기간 아님 · ") + msg)
+    if n.source_url:
+        st.markdown(f"**인터넷 주소** [{n.source_url}]({n.source_url})")
+    if draft.get("region"):
+        st.info(draft["region"])
     if draft["classify"].get("repair"):
         st.info("이 문서에는 보수·보강 지원도 함께 있습니다. 안전점검 부분의 조건만 추출했습니다.")
     for i in draft["issues"]:
@@ -186,4 +198,5 @@ def _editor(draft: dict) -> None:
             st.error(f"저장할 수 없습니다: {e}")
             return
         st.session_state.pop("draft", None)
-        st.success(f"저장했습니다: data/notices/{path.name} (검수 완료 · {date.today().isoformat()})")
+        msg = sidebar.apply_region(final.sigungu_codes, final.local_gov or "")
+        st.success(f"저장했습니다: data/notices/{path.name} (검수 완료 · {date.today().isoformat()}). {msg}")

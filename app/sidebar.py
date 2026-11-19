@@ -76,16 +76,62 @@ def _editor(n: NoticeConditions) -> None:
                 st.rerun()
 
 
+def apply_region(codes: list[str], label: str = "", current: str | None = None) -> str:
+    """공고 지역을 다음 화면 갱신 때 검색 필터(시·도, 시·군·구, 법정동 전체)에 적용하도록 예약한다.
+
+    일반구를 둔 시(예: 수원시 4개 구)는 첫 구를 열고 나머지 구 이름을 안내한다.
+    current(지금 고른 시군구)가 공고 지역에 있으면 그 구를 연다. 반환: 화면 안내문.
+    """
+    codes = [c for c in codes if regions.name_of(c)]
+    if not codes:
+        return ""
+    if current in codes:
+        codes = [current] + [c for c in codes if c != current]
+    st.session_state["pending_region"] = codes
+    names = [regions.name_of(c) for c in codes]
+    head = f"공고 지역({label or names[0]})을 검색 필터에 적용했습니다: {names[0]} · 법정동 전체."
+    if len(codes) > 1:
+        head += f" 같은 공고 지역의 나머지 {len(codes) - 1}곳({', '.join(n.split(' ', 1)[1] for n in names[1:6])}" + (" 등" if len(codes) > 6 else "") + ")은 시·군·구에서 바꿔 고르세요."
+    return head
+
+
+def _take_pending_region() -> None:
+    """예약된 공고 지역·공고 선택을 위젯 값으로 넣는다(위젯을 만들기 전에 불러야 한다)."""
+    pick = st.session_state.pop("pending_notice", None)
+    if pick:
+        for code in pick[0]:
+            st.session_state[f"notice-{code}-False"] = pick[1]
+    codes = st.session_state.pop("pending_region", None)
+    if not codes:
+        return
+    full = regions.name_of(codes[0]) or ""
+    sido = regions.sido_of(full)
+    sggs = regions.list_sigungu(sido)
+    disp = next((n for c, n in sggs if c == codes[0]), None)
+    if disp is None:
+        return
+    st.session_state["sb-sido"] = sido
+    st.session_state["sb-sgg"] = disp
+    st.session_state[f"all-{codes[0]}"] = True
+    st.session_state["notice_region_codes"] = codes  # 시·군·구 목록에 '공고 지역' 표시용
+
+
 def render() -> Ctx:
     sb = st.sidebar
     sb.header("지역·조건")
+    _take_pending_region()
     sidos = regions.list_sido()
-    sido = sb.selectbox("시·도", sidos, index=sidos.index("서울특별시") if "서울특별시" in sidos else 0)
+    if st.session_state.get("sb-sido") not in sidos:
+        st.session_state["sb-sido"] = "서울특별시" if "서울특별시" in sidos else sidos[0]
+    sido = sb.selectbox("시·도", sidos, key="sb-sido")
     sggs = regions.list_sigungu(sido)
     names = [n for _, n in sggs]
-    default_sgg = names.index("종로구") if "종로구" in names else 0
-    sgg_name = sb.selectbox("시·군·구", names, index=default_sgg)
-    sgg = sggs[names.index(sgg_name)][0]
+    if st.session_state.get("sb-sgg") not in names:
+        st.session_state["sb-sgg"] = "종로구" if "종로구" in names else names[0]
+    marked = set(st.session_state.get("notice_region_codes") or [])
+    code_of = {n: c for c, n in sggs}
+    sgg_name = sb.selectbox("시·군·구", names, key="sb-sgg", format_func=lambda n: f"{n} · 공고 지역" if code_of[n] in marked else n)
+    sgg = code_of[sgg_name]
 
     dongs = regions.list_bjdong(sgg)
     dong_names = dict(dongs)
@@ -103,7 +149,14 @@ def render() -> Ctx:
     local = notices_for(sgg, all_notices)
     test_mode = sb.checkbox("다른 지역 공고 적용(시험용)", help="결과 전체에 '시험용'이 표시됩니다.")
     pool = all_notices if test_mode else local
+    # 방금 추출한 초안(미검수)도 고를 수 있게: 저장 전에 바로 판정해 볼 수 있다
+    draft = (st.session_state.get("draft") or {}).get("notice")
+    is_draft = bool(draft and not test_mode and sgg in draft.sigungu_codes and draft.notice_id not in {n.notice_id for n in pool})
+    if is_draft:
+        pool = [draft] + pool
     labels = {NO_NOTICE: "공고 없이 조례 기준"} | {n.notice_id: notice_label(n, eval_date) for n in pool}
+    if is_draft:
+        labels[draft.notice_id] = "추출 초안 · " + labels[draft.notice_id]
     order = [n.notice_id for n in pool] + [NO_NOTICE]  # 접수 시작일이 최신인 공고가 기본
     chosen = sb.selectbox("공고", order, format_func=labels.get, key=f"notice-{sgg}-{test_mode}")
     notice = next((n for n in pool if n.notice_id == chosen), None)

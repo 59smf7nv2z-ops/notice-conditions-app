@@ -15,8 +15,9 @@
   GET https://naverapihub.apigw.ntruss.com/search/v1/news, 헤더 X-NCP-APIGW-API-KEY-ID / X-NCP-APIGW-API-KEY,
   파라미터 query, display(1~100), start(1~1000), sort(sim|date), format(json|xml). 응답 items: title, originallink,
   link, description(<b> 강조), pubDate. 오류 SE01~SE06(400), SE05(404), SE99(500).
-  웹문서 검색 엔드포인트는 가이드가 없어 NAVER_HUB_WEB_URL을 넣었을 때만 쓴다(없으면 뉴스만).
-- 하루 호출 한도 25,000회(가이드 기준, 검색 API 공통). 한 번 찾기에 최대 6회(쿼리 3개 × 뉴스·웹).
+  웹문서는 같은 경로의 /search/v1/webkr (2026-11-19 실제 키로 확인: news·webkr·blog·cafearticle 200, web·doc 404).
+  응답 items: title, link, description(날짜 없음). NAVER_HUB_WEB_URL로 바꿀 수 있다.
+- 하루 호출 한도 25,000회(가이드 기준, 검색 API 공통). 한 번 찾기에 3회(웹문서 2 + 뉴스 1).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 from email.utils import parsedate_to_datetime
 from urllib import robotparser
 from urllib.parse import urljoin, urlparse
@@ -33,6 +35,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from dotenv import load_dotenv
 
+from core import regions
 from core.conditions import NoticeConditions
 from core.llm.base import LLMProvider, Part
 from core.notices import load_notices, notices_for
@@ -53,10 +56,10 @@ NAVER_DEVELOPERS = {
     "extra_params": {},
 }
 
-# NAVER API HUB 검색 (공식 가이드 PDF로 확인). web_url은 가이드가 없어 비움
+# NAVER API HUB 검색 (뉴스: 공식 가이드 PDF, 웹문서 webkr: 실제 호출로 확인)
 NAVER_HUB = {
     "news_url": "https://naverapihub.apigw.ntruss.com/search/v1/news",
-    "web_url": "",
+    "web_url": "https://naverapihub.apigw.ntruss.com/search/v1/webkr",  # 2026-11-19 실제 키로 응답 확인
     "id_header": "X-NCP-APIGW-API-KEY-ID",
     "secret_header": "X-NCP-APIGW-API-KEY",
     "extra_params": {"format": "json"},
@@ -79,6 +82,8 @@ class Candidate:
     date: str  # YYYY-MM-DD 또는 ""
     kind: str  # news | web
     snippet: str = ""
+    score: int = 0  # 관련도(score_candidates)
+    year: int | None = None  # 글의 연도(날짜·제목·주소에서)
 
     @property
     def source_type(self) -> str:
@@ -96,6 +101,7 @@ class HuntResult:
     candidates: list[Candidate] = field(default_factory=list)
     message: str = ""
     calls: int = 0
+    auto: "AutoExtract | None" = None
 
 
 # ---------------------------------------------------------------- 네이버 검색
@@ -156,41 +162,213 @@ def parse_naver(payload: dict, kind: str) -> list[Candidate]:
     return out
 
 
-def queries_for(region_name: str, today: date) -> list[str]:
-    base = f"{region_name} 소규모 노후건축물 안전점검"
-    return [base, f"{today.year}년 {base}", f"{today.year} {region_name} 노후건축물 안전점검 신청"]
+# ---------------------------------------------------------------- 검색어·관련도
+
+SIDO_SHORT = {
+    "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북", "전라남도": "전남",
+    "경상북도": "경북", "경상남도": "경남", "전남광주통합특별시": "광주",
+}
+
+
+@dataclass(frozen=True)
+class SearchTarget:
+    query_name: str  # 검색어에 넣는 이름: '대전 중구'(같은 이름이 여러 곳), '수원시'(일반구는 시 단위로 공고)
+    term: str  # 제목·요약에 있어야 하는 지역 말: '중구', '수원'
+    qualifier: str = ""  # 같은 이름이 여러 곳이면 함께 있어야 하는 시·도 약칭: '대전'
+
+
+def _short_sido(sido: str) -> str:
+    return SIDO_SHORT.get(sido, sido[:2])
+
+
+@lru_cache(maxsize=1)
+def _name_counts() -> dict[str, int]:
+    """시·군·구(일반구를 둔 시는 시) 이름이 전국에 몇 번 나오는지. '중구' 7, '고성군' 2 …"""
+    seen: dict[str, set[str]] = {}
+    for sido in regions.list_sido():
+        for _, name in regions.list_sigungu(sido):
+            seen.setdefault(name.split(" ")[0], set()).add(sido)
+    return {k: len(v) for k, v in seen.items()}
+
+
+def search_target(region: str) -> SearchTarget:
+    """시군구코드(5자리) 또는 '대전광역시 중구' 같은 이름 → 검색어용 지역 이름."""
+    full = (regions.name_of(region) if re.fullmatch(r"\d{5}", region) else region) or region
+    toks = full.split()
+    short = _short_sido(toks[0])
+    if len(toks) == 1:  # 세종처럼 시·도 단위
+        return SearchTarget(short, short)
+    name = toks[1]  # '경기도 수원시 장안구' → 수원시(소규모 노후건축물 점검은 시 건축안전센터가 공고)
+    term = name[:-1] if len(name) >= 3 and name[-1] in "시군구" else name
+    if _name_counts().get(name, 1) > 1:
+        return SearchTarget(f"{short} {name}", term, short)
+    return SearchTarget(name, term)
+
+
+def queries_for(target: SearchTarget, today: date) -> list[tuple[str, str, dict]]:
+    """(검색 종류, 검색어, 추가 파라미터). 웹문서는 구청·시청 게시판 공고를, 뉴스는 보도된 모집 소식을 찾는다.
+
+    공고 제목에 흔한 말: '소규모 노후 건축물 (무료) 안전점검 신청 안내·모집 공고'. 연도를 넣은 검색어로 올해 공고를 앞으로 끌어온다.
+    블로그·카페는 광고가 대부분이라 쓰지 않는다.
+    """
+    n = target.query_name
+    return [
+        ("web", f"{n} 소규모 노후건축물 안전점검 신청", {}),
+        ("web", f"{today.year}년 {n} 소규모 노후 건축물 안전점검 공고", {}),
+        ("news", f"{n} 노후 건축물 무료 안전점검 신청", {"sort": "sim"}),
+    ]
+
+
+RELEVANT_RE = re.compile(r"노후\s*(건축물|건물)|소규모\s*건축물|건축물\s*(무료\s*)?안전\s*점검")
+NOISE_RE = re.compile(r"점검기관|점검단|후보자|매뉴얼|관리자\s*교육|간판|승강기|교량|재건축|재개발|정비사업|빈집|모아타운|어린이|놀이시설|결재|조례|자치법규|회의록|의회")
+APPLY_RE = re.compile(r"신청|모집|접수|공고|안내")
+DONE_RE = re.compile(r"완료|마쳐|마무리|결과|성료|계획")
+# 여러 기관이 함께 쓰는 관공서 사이트: 한 글에 지역 이름이 있어도 사이트 전체를 그 지역 것으로 보지 않는다
+SHARED_HOSTS = ("opengov.", "news.seoul.go.kr", "elis.go.kr", "law.go.kr", "molit.go.kr", "korea.kr", "epeople.go.kr", "kira.or.kr")
+LOCAL_GOV_HOST_RE = re.compile(r"\.go\.kr$|\.(seoul|busan|daegu|incheon|gwangju|daejeon|ulsan)\.kr$")
+FILE_URL_RE = re.compile(r"filedown|fileDownload|download\.|FileDown|DWN\.jsp", re.I)
+AUTO_MIN_SCORE = 5  # 자동 추출 기준: 올해 글(또는 작년 관공서 공고) 이상
+
+
+def _year_of(c: Candidate) -> int | None:
+    if c.date:
+        return int(c.date[:4])
+    for pat, text in ((r"(20\d\d)\s*년", c.title), (r"(?<!\d)(20\d\d)[01]\d[0-3]\d", c.url), (r"(20\d\d)\s*[.년]", c.snippet)):
+        m = re.search(pat, text)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _official(host: str) -> bool:
+    """지자체·관공서 사이트(구청 사이트는 seogu.gwangju.kr처럼 go.kr이 아닌 곳도 있다)."""
+    return bool(LOCAL_GOV_HOST_RE.search(host))
+
+
+_CHO = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"]
+_JUNG = ["a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"]
+_JONG = ["", "k", "k", "k", "n", "n", "n", "t", "l", "k", "m", "l", "l", "l", "p", "l", "m", "p", "p", "t", "t", "ng", "t", "t", "k", "t", "p", "t"]
+
+
+def romanize(text: str) -> str:
+    """한글 → 로마자(국어의 로마자 표기법, 단순화). 지자체 사이트 주소 비교용: 종로→jongno, 중구→junggu, 고성→goseong."""
+    out = []
+    syl = [ord(ch) - 0xAC00 for ch in text if 0 <= ord(ch) - 0xAC00 < 11172]
+    for i, v in enumerate(syl):
+        cho, jung, jong = v // 588, (v % 588) // 28, v % 28
+        c = _CHO[cho]
+        if i > 0 and cho == 5:  # ㄹ 앞 받침에 따른 소리: ㅇ·ㅁ·ㄱ·ㅂ 뒤 n, ㄴ·ㄹ 뒤 l
+            prev = syl[i - 1] % 28
+            c = "n" if prev in (21, 16, 1, 17) else "l" if prev in (4, 8) else "r"
+            if prev == 4:  # 신라 → silla
+                out[-1] = out[-1][:-1] + "l"
+        elif i > 0 and cho == 11 and syl[i - 1] % 28 not in (0, 21):  # 받침 + ㅇ: 받침이 넘어가 소리남(근사)
+            c = ""
+        out.append(c + _JUNG[jung] + _JONG[jong])
+    return "".join(out)
+
+
+def _host_is_region(host: str, target: SearchTarget) -> bool:
+    """사이트 주소가 그 지자체 것으로 보이는지: www.djjunggu.go.kr(대전 중구), www.goseong.go.kr(고성), suwon.go.kr."""
+    h = host.replace("-", "").lower()
+    name = romanize(target.term if target.term.endswith(("구", "군")) or len(target.term) < 2 else target.term)
+    if not name or name not in h:
+        return False
+    if not target.qualifier:
+        return True
+    q = romanize(target.qualifier)
+    initials = "".join(_CHO[(ord(ch) - 0xAC00) // 588][:1] for ch in target.qualifier if 0 <= ord(ch) - 0xAC00 < 11172)
+    return q in h or h.split(".")[-3:-2] == [q] or h.replace("www.", "").startswith(initials + name)
+
+
+def _shared(host: str) -> bool:
+    return any(h in host for h in SHARED_HOSTS)
+
+
+def _newsish(url: str, host: str) -> bool:
+    return any(h in host for h in NEWS_HOST_HINT) or "articleView" in url or "/news/" in url
+
+
+def is_file_link(c: Candidate) -> bool:
+    """첨부파일 바로가기(HWP·PDF 내려받기). 본문을 자동으로 가져오지 않는다."""
+    return bool(FILE_URL_RE.search(c.url) or ATTACHMENT_RE.search(c.url) or ATTACHMENT_RE.search(c.title))
+
+
+def score_candidates(cands: list[Candidate], target: SearchTarget, today: date) -> list[Candidate]:
+    """관련 없는 글·다른 지역 글을 빼고 점수순으로. 점수: 올해 +4·작년 +1·더 오래 -2, 관공서 +3, 신청·모집 +2, 완료·결과 -2, 뉴스 -1.
+
+    지역 확인: 제목·요약에 지역 이름(같은 이름이 여러 곳이면 시·도 약칭도)이 있거나, 그런 글이 올라온 관공서 도메인의 글.
+    """
+    def text(c: Candidate) -> str:
+        return f"{c.title} {c.snippet}"
+
+    def names_region(t: str) -> bool:
+        return target.term in t and (not target.qualifier or target.qualifier in t)
+
+    kept = [c for c in cands if RELEVANT_RE.search(text(c)) and "점검" in text(c) and not NOISE_RE.search(c.title)]
+    for c in kept:
+        if c.kind == "web" and _newsish(c.url, c.source):
+            c.kind = "news"  # 웹문서 검색에 나온 기사
+    # 제목에 지역 이름이 있는 글이 올라온 지자체 사이트 → 그 사이트 글은 제목에 지역 이름이 없어도 같은 지역
+    domains = {c.source for c in kept if _official(c.source) and not _shared(c.source)
+               and (names_region(c.title) or _host_is_region(c.source, target))}
+    out = []
+    for c in kept:
+        if c.source in domains:
+            pass
+        elif _official(c.source):
+            if not names_region(c.title):  # 다른 지자체·공용 사이트 글은 제목에 지역 이름이 있어야
+                continue
+        elif not names_region(text(c)):
+            continue
+        c.year = _year_of(c)
+        s = 0
+        if c.year == today.year:
+            s += 4
+        elif c.year == today.year - 1:
+            s += 1
+        elif c.year is not None:
+            s -= 2
+        s += 3 if _official(c.source) else 0
+        s += 2 if APPLY_RE.search(c.title) else 0
+        s -= 2 if DONE_RE.search(c.title) else 0
+        s -= 1 if c.kind == "news" else 0
+        c.score = s
+        out.append(c)
+    return sorted(out, key=lambda c: (c.score, c.date or str(c.year or "")), reverse=True)
 
 
 def search_candidates(region_name: str, today: date, session: requests.Session | None = None, display: int = 20) -> tuple[list[Candidate], int]:
+    """region_name: 시군구코드(5자리) 또는 '대전광역시 중구' 같은 이름. 반환: (관련도순 후보, 호출 횟수)."""
     cfg = naver_config()
     session = session or requests.Session()
     headers = {cfg["id_header"]: cfg["id"], cfg["secret_header"]: cfg["secret"]}
+    target = search_target(region_name)
     seen: dict[str, Candidate] = {}
     calls = 0
-    endpoints = [("news", cfg["news_url"], {"sort": "date"}), ("web", cfg["web_url"], {})]
-    for q in queries_for(region_name, today):
-        for kind, url, extra in endpoints:
-            if not url:
-                continue  # 웹문서 엔드포인트가 설정되지 않음(HUB)
-            params = {"query": q, "display": display, "start": 1, **cfg.get("extra_params", {}), **extra}
-            r = session.get(url, params=params, headers=headers, timeout=TIMEOUT)
-            calls += 1
-            if r.status_code in (401, 403):
-                raise HunterError("네이버 검색 인증 실패: Client ID·Secret과 NAVER_API_STYLE을 확인하세요.")
-            if r.status_code == 429:
-                raise HunterError("네이버 검색 호출 한도를 넘었습니다.")
-            if r.status_code >= 400:
-                code = ""
-                try:
-                    body = r.json()
-                    code = body.get("errorCode") or (body.get("error") or {}).get("errorCode") or ""
-                except (ValueError, AttributeError):
-                    pass
-                raise HunterError(f"네이버 검색 오류(HTTP {r.status_code}{' ' + str(code) if code else ''})")
-            for c in parse_naver(r.json(), kind):
-                seen.setdefault(c.url, c)
-    cands = sorted(seen.values(), key=lambda c: c.date or "", reverse=True)
-    return cands, calls
+    urls = {"news": cfg["news_url"], "web": cfg["web_url"]}
+    for kind, q, extra in queries_for(target, today):
+        url = urls[kind]
+        if not url:
+            continue  # 웹문서 엔드포인트가 설정되지 않음
+        params = {"query": q, "display": display, "start": 1, **cfg.get("extra_params", {}), **extra}
+        r = session.get(url, params=params, headers=headers, timeout=TIMEOUT)
+        calls += 1
+        if r.status_code in (401, 403):
+            raise HunterError("네이버 검색 인증 실패: Client ID·Secret과 NAVER_API_STYLE을 확인하세요.")
+        if r.status_code == 429:
+            raise HunterError("네이버 검색 호출 한도를 넘었습니다.")
+        if r.status_code >= 400:
+            code = ""
+            try:
+                body = r.json()
+                code = body.get("errorCode") or (body.get("error") or {}).get("errorCode") or ""
+            except (ValueError, AttributeError):
+                pass
+            raise HunterError(f"네이버 검색 오류(HTTP {r.status_code}{' ' + str(code) if code else ''})")
+        for c in parse_naver(r.json(), kind):
+            seen.setdefault(c.url, c)
+    return score_candidates(list(seen.values()), target, today), calls
 
 
 # ---------------------------------------------------------------- 본문 가져오기
@@ -262,38 +440,101 @@ def page_parts(page: PageContent) -> list[Part]:
     return [Part.of_text(f"[웹 페이지: {urlparse(page.url).netloc}]\n{page.text[:60_000]}", name=page.url)]
 
 
-def extract_from_candidate(cand: Candidate, provider: LLMProvider, session: requests.Session | None = None):
-    """고른 링크 하나 → 본문 → 분류·추출. 결과는 reviewed=False(검수 전 저장 금지)."""
+def extract_from_candidate(cand: Candidate, provider: LLMProvider, session: requests.Session | None = None, page: PageContent | None = None):
+    """고른 링크 하나 → 본문 → 분류·추출. 결과는 reviewed=False(검수 전 저장 금지), 원문 주소를 남긴다."""
     from core.llm import extractor
 
-    page = fetch_page(cand.url, session)
+    page = page or fetch_page(cand.url, session)
     parts = page_parts(page)
-    c = extractor.classify(parts, provider)
-    if not c.is_apply_inspection:
+    c, r = extractor.analyze(parts, provider)  # 분류 + 추출 한 번에
+    if r is None:
         return page, c, None
-    r = extractor.extract(parts, provider)
     st = cand.source_type
     if st in ("NEWS", "PRESS_RELEASE") or r.notice.source_type in ("NEWS", "PRESS_RELEASE"):
         r.notice = r.notice.model_copy(update={"source_type": st if st != "OFFICIAL_NOTICE" else r.notice.source_type})
-        r.issues.insert(0, "뉴스·보도자료 출처입니다. 원문 공고를 확인하세요")
-    r.notice = r.notice.model_copy(update={"reviewed": False})
+        msg = "뉴스·보도자료 출처입니다. 원문 공고를 확인하세요"
+        r.issues = [msg] + [i for i in r.issues if i != msg]
+    r.notice = r.notice.model_copy(update={"reviewed": False, "source_url": cand.url})
     return page, c, r
+
+
+@dataclass
+class AutoExtract:
+    """검색 상위 글을 골라 바로 분류·추출한 결과."""
+
+    candidate: Candidate | None = None
+    page: PageContent | None = None
+    classify: object | None = None  # extractor.ClassifyResult
+    extract: object | None = None  # extractor.ExtractResult (안전점검 신청형일 때)
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (주소, 건너뛴 이유)
+    error: str = ""
+    region_mismatch: bool = False  # 추출한 지자체가 고른 지역과 다름
+
+
+def auto_pick(cands: list[Candidate]) -> list[Candidate]:
+    """자동 추출에 쓸 글: 점수 기준 이상, 첨부파일 바로가기 제외, 점수순."""
+    return [c for c in cands if c.score >= AUTO_MIN_SCORE and not is_file_link(c)]
+
+
+def auto_extract(
+    cands: list[Candidate], provider: LLMProvider, sigungu_cd: str | None = None,
+    session: requests.Session | None = None, max_pages: int = 3,
+) -> AutoExtract:
+    """상위 글의 본문을 가져와 LLM 분류·추출을 한 번만 한다(비용 상한).
+
+    본문을 못 가져오거나(로봇 차단·접근 제한) 본문에 점검 이야기가 없으면 다음 글로(최대 max_pages개).
+    추출한 지자체가 고른 시군구와 다르면 region_mismatch(검색이 다른 지역 글을 고른 것).
+    """
+    from core.llm.base import LLMError
+
+    out = AutoExtract()
+    for cand in auto_pick(cands)[:max_pages]:
+        try:
+            page = fetch_page(cand.url, session)
+        except (HunterError, requests.RequestException) as e:
+            out.skipped.append((cand.url, str(e) if isinstance(e, HunterError) else "페이지 연결 실패"))
+            continue
+        if len(page.text) < 150 or "점검" not in page.text:
+            out.skipped.append((cand.url, "본문에 공고 내용이 없습니다(첨부파일에만 있을 수 있음)"))
+            continue
+        out.candidate, out.page = cand, page
+        try:
+            _, out.classify, out.extract = extract_from_candidate(cand, provider, page=page)
+        except LLMError as e:
+            out.error = str(e)
+        if out.extract is not None and sigungu_cd and out.extract.notice.sigungu_codes:
+            out.region_mismatch = sigungu_cd not in out.extract.notice.sigungu_codes
+        return out
+    return out
 
 
 # ---------------------------------------------------------------- 전체 순서
 
 
-def hunt(sigungu_cd: str, region_name: str, today: date, has_ordinance: bool, session: requests.Session | None = None) -> HuntResult:
-    reviewed = [n for n in notices_for(sigungu_cd, load_notices()) if n.reviewed]
+def hunt(
+    sigungu_cd: str, region_name: str, today: date, has_ordinance: bool,
+    session: requests.Session | None = None, auto_provider: LLMProvider | None = None,
+) -> HuntResult:
+    """검수된 공고(접수 마감 전) → 네이버 검색 → (auto_provider가 있으면) 상위 글 바로 추출.
+
+    region_name은 화면 표시용. 검색어는 시군구코드로 만든다(search_target).
+    """
+    reviewed = [n for n in notices_for(sigungu_cd, load_notices()) if n.reviewed and n.period_status(today)[0] != "CLOSED"]
     if reviewed:
         return HuntResult("reviewed", notices=reviewed, message=f"검수된 공고 {len(reviewed)}건이 있습니다.")
     try:
-        cands, calls = search_candidates(region_name, today, session)
+        cands, calls = search_candidates(sigungu_cd if re.fullmatch(r"\d{5}", sigungu_cd or "") else region_name, today, session)
     except NotConfigured as e:
         return HuntResult("none", message=f"네이버 검색을 쓸 수 없습니다({e}). " + _fallback(has_ordinance))
-    if cands:
-        return HuntResult("search", candidates=cands, calls=calls, message=f"검색 후보 {len(cands)}건. 링크를 골라 본문을 가져오세요.")
-    return HuntResult("none", calls=calls, message="검색 결과가 없습니다. " + _fallback(has_ordinance))
+    if not cands:
+        return HuntResult("none", calls=calls, message="이 지역 공고를 찾지 못했습니다. " + _fallback(has_ordinance))
+    res = HuntResult("search", candidates=cands, calls=calls, message=f"검색 후보 {len(cands)}건.")
+    if auto_provider is not None:
+        if auto_pick(cands):
+            res.auto = auto_extract(cands, auto_provider, sigungu_cd, session)
+        else:
+            res.message += " 올해 공고로 보이는 글이 없어 자동 추출은 하지 않았습니다. 링크를 골라 추출하세요."
+    return res
 
 
 def _fallback(has_ordinance: bool) -> str:

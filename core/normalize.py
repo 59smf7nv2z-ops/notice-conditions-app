@@ -149,16 +149,15 @@ def use_tokens(text: str) -> tuple[list[str], list[str]]:
     if not t:
         return [], []
     tokens: list[str] = []
-    if re.search(r"제?1[·ㆍ,및]?2?종근린생활시설|제1·2종근린|근린생활시설", t):
-        if re.search(r"제?1[·ㆍ,및]2종|제1종및제2종", t) or (t == "근린생활시설"):
+    if "근린생활시설" in t or "근생" in t:
+        # "제1종·제2종", "제1종,제2종", "제1·2종", "제1종및제2종" → 둘 다. 종 언급이 없으면 둘 다.
+        has1 = "1종" in t or re.search(r"1[·ㆍ,및]제?2", t) is not None
+        has2 = "2종" in t
+        if has1 == has2:
             tokens += ["제1종근생", "제2종근생"]
-        elif "제1종" in t:
-            tokens.append("제1종근생")
-        elif "제2종" in t:
-            tokens.append("제2종근생")
         else:
-            tokens += ["제1종근생", "제2종근생"]
-    rest = re.sub(r"제?1?[·ㆍ,및]?제?2?종?근린생활시설", "", t)
+            tokens.append("제1종근생" if has1 else "제2종근생")
+    rest = re.sub(r"(제?[12]종?[·ㆍ,및]?)*근(린생활시설|생)", "", t)
     if "단독주택" in rest:
         tokens.append("단독주택")
         if re.search(r"다가구주택(은|을)?제외", rest):

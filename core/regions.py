@@ -47,6 +47,17 @@ SIDO_ALIASES = {
     "전북": "전북특별자치도",
 }
 
+# 공고문에 흔한 옛 이름·줄임말(조례 매핑용 SIDO_ALIASES와 따로 둔다: 공고 지역 해석에만 쓴다)
+NOTICE_SIDO_ALIASES = {
+    "강원도": "강원특별자치도",
+    "전라북도": "전북특별자치도",
+    "광주": "전남광주통합특별시",
+    "광주광역시": "전남광주통합특별시",
+    "전남": "전남광주통합특별시",
+    "전라남도": "전남광주통합특별시",
+    "제주시": "제주특별자치도 제주시",
+}
+
 
 @dataclass(frozen=True)
 class CodeRow:
@@ -235,3 +246,53 @@ def match_sigungu(sido: str, sigungu: str) -> dict:
         return {"codes": list(kids), "kind": "parent_city", "abolished": []}
     dead = [c.sigungu_cd for c in _all_rows() if _is_sigungu_level(c) and not c.alive and c.name == full]
     return {"codes": [], "kind": "abolished" if dead else "none", "abolished": dead}
+
+
+def resolve_local_gov(text: str | None) -> dict:
+    """공고문의 지자체 표현 → 대장 조회용 sigunguCd 목록.
+
+    예: '수원시'·'경기도 수원시청' → 수원시 4개 구, '대전광역시 중구청' → 대전 중구, '광주 서구' → 광주 서구,
+    '서울특별시' → 서울 25개 구. 같은 이름이 여러 시도에 있으면(예: '중구') 고르지 않고 candidates로 돌려준다.
+    반환: {"codes": [...], "kind": exact|parent_city|sido_only|ambiguous|none, "label": 표시이름, "candidates": [(이름, [codes])]}
+    """
+    empty = {"codes": [], "kind": "none", "label": "", "candidates": []}
+    if not text or not text.strip():
+        return empty
+    t = _clean(re.sub(r"[()（）]", " ", text))
+    # '중구청', '수원시청', '청주시청' → 청 떼기(단 '청'으로 끝나는 지명은 없다고 본다)
+    tokens = [re.sub(r"(?<=[시군구])청$", "", w) for w in t.split(" ") if w]
+    tokens = [w for w in tokens if w not in ("시청", "구청", "군청")]
+    if not tokens:
+        return empty
+    sidos = set(list_sido())
+
+    def as_sido(w: str) -> str | None:
+        n = NOTICE_SIDO_ALIASES.get(w) or SIDO_ALIASES.get(w) or w
+        return n if n in sidos else None
+
+    sido = as_sido(tokens[0])
+    rest = " ".join(tokens[1:]) if sido else " ".join(tokens)
+    if sido and not rest:
+        m = match_sigungu(sido, "")
+        return {**m, "label": sido, "candidates": []}
+    if sido:
+        m = match_sigungu(sido, rest)
+        if m["codes"]:
+            return {**m, "label": f"{sido} {rest}", "candidates": []}
+    # 시도 없이 시군구 이름만: 모든 시도에서 찾는다
+    alias = NOTICE_SIDO_ALIASES.get(rest)
+    if alias and " " in alias:  # '제주시' 같은 특수 이름
+        sido_, sg = alias.split(" ", 1)
+        return {**match_sigungu(sido_, sg), "label": alias, "candidates": []}
+    pool = [s for s in sidos if not sido or s == sido]
+    found: list[tuple[str, list[str]]] = []
+    for s in pool:
+        m = match_sigungu(s, rest)
+        if m["codes"]:
+            found.append((f"{s} {rest}", m["codes"]))
+    if len(found) == 1:
+        label, codes = found[0]
+        return {"codes": codes, "kind": "parent_city" if len(codes) > 1 else "exact", "label": label, "candidates": []}
+    if len(found) > 1:
+        return {"codes": [], "kind": "ambiguous", "label": rest, "candidates": found}
+    return {**empty, "label": t}

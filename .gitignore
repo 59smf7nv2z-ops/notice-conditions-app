@@ -32,3 +32,6 @@ tsconfig.tsbuildinfo
 # 로컬 도구 설정
 .claude/
 .streamlit/secrets.toml
+
+# graphify 지식 그래프 결과물(로컬 분석용)
+graphify-out/

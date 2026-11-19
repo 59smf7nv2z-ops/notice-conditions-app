@@ -98,13 +98,13 @@ def run(provider, cases: list[Path]) -> Score:
         fmt = file_format(case)
         try:
             c = extractor.classify(pre.parts, provider, log=provider.name != "mock")
-            s.input_tokens += c.usage.input_tokens
-            s.output_tokens += c.usage.output_tokens
+            s.input_tokens += c.usage.total_input
+            s.output_tokens += c.usage.total_output
             s.retries += c.usage.retries
             s.classify_ok += c.business_type == truth_bt
             r = extractor.extract(pre.parts, provider, log=provider.name != "mock")
-            s.input_tokens += r.usage.input_tokens
-            s.output_tokens += r.usage.output_tokens
+            s.input_tokens += r.usage.total_input
+            s.output_tokens += r.usage.total_output
             s.retries += r.usage.retries
         except LLMError as e:
             s.failures += 1

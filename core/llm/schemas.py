@@ -4,13 +4,14 @@
 - 층수·연면적은 숫자로 바꾸지 않고 원문 표현("3층 이하", "연면적 200㎡ 미만")을 받는다.
   이하/미만 해석은 코드(core.conditions.parse_*)가 한다.
 - 날짜는 원문 그대로의 날짜만 YYYY-MM-DD로. 마감 여부는 묻지 않는다.
+- confidence(high/medium/low)와 fallback_reason(): 값이 있으면 core.llm.fallback이 상위 모델로 다시 한다.
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 
 class StrField(BaseModel):
@@ -38,11 +39,17 @@ BusinessTypeName = Literal[
 ]
 
 
+Confidence = Literal["high", "medium", "low"]
+
+
 class ClassifyOut(BaseModel):
     business_type: BusinessTypeName
-    evidence: str | None  # 원문 인용
-    reason: str  # 한두 문장
+    evidence: str | None  # 원문 핵심 구절(서술형 이유는 받지 않는다: 출력 토큰 절약)
     has_repair_section: bool  # 같은 문서에 보수·보강 지원이 함께 있는지
+    confidence: Confidence  # low면 상위 모델로 다시 한다
+
+    def fallback_reason(self) -> str | None:
+        return "분류 확신 낮음" if self.confidence == "low" else None
 
 
 class ExtractOut(BaseModel):
@@ -75,3 +82,34 @@ class ExtractOut(BaseModel):
     apply_method: StrField  # 신청방법
     documents: ListField  # 제출서류
     source_type: Literal["OFFICIAL_NOTICE", "LEAFLET", "PRESS_RELEASE", "NEWS"]
+    confidence: Confidence  # 글자가 흐리거나 조건을 해석하기 애매하면 low
+
+    def fallback_reason(self) -> str | None:
+        """상위 모델로 다시 할 이유. 모델 자기 평가(low) + 핵심 조건이 하나도 없는 경우."""
+        if self.confidence == "low":
+            return "추출 확신 낮음"
+        core = (self.min_years.value, self.built_before_year.value, self.floors_text.value, self.area_text.value)
+        if all(v is None for v in core) and not self.use_conditions.value and not self.structure_conditions.value:
+            return "핵심 조건(경과연수·층수·연면적·용도·구조)을 하나도 찾지 못함"
+        return None
+
+
+class _AnalyzeBase(BaseModel):
+    def fallback_reason(self) -> str | None:
+        if self.confidence == "low":
+            return "확신 낮음"
+        if self.business_type == "APPLY_INSPECTION":
+            return ExtractOut.fallback_reason(self)
+        return None
+
+
+# 분류 + 추출을 한 번에(문서 입력 토큰을 한 번만 낸다). 분류 항목을 앞에 둬서 모델이 먼저 정하게 한다.
+# 출력 스키마가 다르면 프롬프트 캐시가 이어지지 않아(2026-11-17 확인) 두 번 부르는 것보다 싸다.
+AnalyzeOut = create_model(
+    "AnalyzeOut",
+    __base__=_AnalyzeBase,
+    business_type=(BusinessTypeName, ...),
+    business_evidence=(str | None, ...),
+    has_repair_section=(bool, ...),
+    **{k: (f.annotation, ...) for k, f in ExtractOut.model_fields.items()},
+)

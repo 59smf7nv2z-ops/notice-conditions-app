@@ -139,3 +139,41 @@ def test_normalize_df_reports_unmapped():
     assert list(r.df["structure_std"]) == ["조적조", None, None]
     assert r.unmapped_structures == {"철골철근콘크리트구조": 2}
     assert r.unmapped_uses == {"이상한용도": 1, "(빈 값)": 1}
+
+
+@pytest.mark.parametrize("text", ["제1종·제2종 근린생활시설", "제1종, 제2종 근린생활시설", "제1·2종 근린생활시설", "제1종 및 제2종 근린생활시설"])
+def test_use_tokens_both_neighborhood_classes(text):
+    # 예전에는 "제1종·제2종"에서 제2종이 빠져 제2종 근생 건물이 용도 조건에서 떨어졌다(2026-11-17 실추출에서 발견)
+    from core import normalize
+
+    assert normalize.use_tokens(text)[0][:2] == ["제1종근생", "제2종근생"]
+
+
+@pytest.mark.parametrize("text, kind, n", [
+    ("수원시", "parent_city", 4), ("경기도 수원시청", "parent_city", 4), ("대전광역시 중구청", "exact", 1),
+    ("광주 서구", "exact", 1), ("서울특별시", "sido_only", 25), ("중구", "ambiguous", 0), ("청주시", "parent_city", 4),
+])
+def test_resolve_local_gov(text, kind, n):
+    from core import regions
+
+    r = regions.resolve_local_gov(text)
+    assert r["kind"] == kind and len(r["codes"]) == n
+    if kind == "ambiguous":
+        assert len(r["candidates"]) > 1  # 고르지 않고 후보만 준다
+
+
+def test_period_status():
+    from datetime import date
+
+    from core.conditions import NoticeConditions
+
+    base = dict(notice_id="t", sigungu_codes=["11110"])
+    today = date(2026, 11, 17)
+    n = NoticeConditions(**base, apply_start=date(2026, 9, 1), apply_end=date(2026, 9, 30))
+    assert n.period_status(today)[0] == "CLOSED"
+    assert NoticeConditions(**base, apply_start=date(2026, 12, 1), apply_end=date(2026, 12, 31)).period_status(today)[0] == "NOT_STARTED"
+    assert NoticeConditions(**base, apply_start=date(2026, 11, 1), apply_end=date(2026, 11, 30)).period_status(today)[0] == "OPEN"
+    assert NoticeConditions(**base).period_status(today)[0] == "UNKNOWN"
+    assert NoticeConditions(**base, apply_start=date(2026, 11, 1)).period_status(today)[0] == "UNKNOWN"
+    # 날짜 칸이 비어도 원문 기간에서 읽는다
+    assert NoticeConditions(**base, application_period="2026. 9. 1. ~ 9. 30.").period_status(today)[0] == "CLOSED"

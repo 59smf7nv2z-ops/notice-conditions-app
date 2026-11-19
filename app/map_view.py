@@ -1,7 +1,7 @@
 """탭4 지도 드릴다운 (folium + streamlit-folium).
 
 Level 1  시군구 경계 + 법정동 폴리곤(조회·판정한 동은 1차 후보 수로 채색, 미조회 동은 회색). 동을 누르면 그 동 선택
-Level 2  법정동 단위 대상 핀(MarkerCluster, 상태별 색, 상태 토글)
+Level 2  법정동 단위 대상 핀(MarkerCluster, 상태별 모양·색: 1차 후보 물방울 핀 ✓, 확인 필요 네모 핀 ?, 조례만 원형 핀, 상태 토글)
 Level 3  핀·표에서 건물을 고르면 오른쪽 상세 패널
 
 좌표·경계는 st.session_state에만 둔다(브이월드 지오코더 응답은 저장 금지). 배경지도는 OSM:
@@ -13,7 +13,7 @@ from __future__ import annotations
 import folium
 import pandas as pd
 import streamlit as st
-from folium.plugins import MarkerCluster
+from folium.plugins import BeautifyIcon, MarkerCluster
 from streamlit_folium import st_folium
 
 from app.state import Ctx
@@ -25,6 +25,16 @@ from core.pipeline import RegionResult, run_region
 
 COLORS = {"CANDIDATE": "#2e7d32", "NEEDS_CHECK": "#ef6c00", "ORDINANCE_ONLY": "#1565c0"}
 PRIORITY = ["CANDIDATE", "NEEDS_CHECK", "ORDINANCE_ONLY"]
+# (핀 모양, 안의 아이콘, 범례 기호): 색을 못 구분해도 모양으로 구분되게
+SHAPES = {"CANDIDATE": ("marker", "check", "▼"), "NEEDS_CHECK": ("rectangle", "question", "■"), "ORDINANCE_ONLY": ("circle", "info", "●")}
+
+
+def pin_icon(status: str) -> BeautifyIcon:
+    shape, icon, _ = SHAPES[status]
+    return BeautifyIcon(
+        icon=icon, icon_shape=shape, border_color="#ffffff", border_width=1.5,
+        background_color=COLORS[status], text_color="#ffffff", inner_icon_style="font-size:11px;",
+    )
 CLUSTER_WARN = 2000
 
 
@@ -42,11 +52,9 @@ def _banner(ctx: Ctx) -> None:
         bound = lambda v, b, u: f"{v:g}{u} {'이하' if b == 'LE' else '미만'}" if isinstance(v, float) else f"{v}{u} {'이하' if b == 'LE' else '미만'}"  # noqa: E731
         nums = [f"{n.min_years}년 이상" if n.min_years else ""]
         nums += [bound(n.max_floors, n.floors_bound, "층") if n.max_floors else "", bound(n.max_area, n.area_bound, "㎡") if n.max_area else ""]
-        if n.apply_start or n.apply_end:
-            period = f"접수 {n.apply_start or '?'}~{n.apply_end or '?'}"
-            state = "접수 마감" if n.is_expired(ctx.eval_date) else "접수 중/예정"
-        else:
-            period, state = "접수기간 미상", "마감 여부 판단 불가"
+        code, _ = n.period_status(ctx.eval_date)
+        state = {"OPEN": "접수 중", "NOT_STARTED": "접수 전", "CLOSED": "접수 마감", "UNKNOWN": "기간 확인 불가"}[code]
+        period = f"접수 {n.apply_start or '?'}~{n.apply_end or '?'}" if (n.apply_start or n.apply_end) else "접수기간 미상"
         parts.append(f"**{n.program_name or n.notice_id}** · {period} ({state}) · {'검수 완료' if n.reviewed else '미검수'}")
         parts.append("핵심 조건: " + ", ".join(x for x in nums if x))
     else:
@@ -167,9 +175,8 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
                 first = g.iloc[0]
                 pks = ",".join(g["mgmBldrgstPk"].astype(str))
                 label = STATUS_LABEL[best] + (f" 외 {len(g) - 1}동" if len(g) > 1 else "")
-                folium.CircleMarker(
-                    [first["lat"], first["lng"]], radius=7, color="#fff", weight=1.5,
-                    fill=True, fill_color=COLORS[best], fill_opacity=0.9,
+                folium.Marker(
+                    [first["lat"], first["lng"]], icon=pin_icon(best),
                     tooltip=f"{first['platPlc']} · {label} · PK:{pks}",
                 ).add_to(cluster)
 
@@ -179,7 +186,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
             r0 = mapped[mapped["parcel_key"] == pick].iloc[0]
             center, zoom = (r0["lat"], r0["lng"]), 18
         legend = "".join(
-            f'<span style="color:{COLORS[s]}">●</span> {STATUS_LABEL[s]}&nbsp;&nbsp;' for s in PRIORITY
+            f'<span style="color:{COLORS[s]}">{SHAPES[s][2]}</span> {STATUS_LABEL[s]}&nbsp;&nbsp;' for s in PRIORITY
         ) + '<span style="color:#bdbdbd">■</span> 미조회 동'
         m.get_root().html.add_child(folium.Element(
             f'<div style="position:fixed;bottom:18px;left:18px;z-index:9999;background:#fff;padding:6px 10px;'

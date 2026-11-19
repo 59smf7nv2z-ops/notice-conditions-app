@@ -31,6 +31,7 @@ FIELDS = [
     ("priority_rules", "우선순위(판정에 안 씀)"),
     ("offmap_conditions", "대장 외 조건(현장확인)"),
     ("support_content", "지원내용"),
+    ("source_url", "인터넷 주소"),
 ]
 
 
@@ -65,6 +66,8 @@ def render(ctx: Ctx) -> None:
         st.markdown(":orange-badge[미검수] 사람이 원문과 대조해 확인하기 전입니다.")
     if nid in st.session_state["notice_edits"]:
         st.markdown(":blue-badge[수정됨] 이 세션에서 담당자가 고친 값입니다.")
+    if n.source_url:
+        st.markdown(f"**인터넷 주소** [{n.source_url}]({n.source_url})")
 
     left, right = st.columns([3, 2])
     with left:

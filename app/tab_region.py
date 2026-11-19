@@ -26,9 +26,15 @@ def banners(ctx: Ctx) -> None:
             badges.append(":blue-badge[수정됨]")
         if ctx.test_mode:
             badges.append(":red-badge[시험용 · 다른 지역 공고]")
-        st.markdown(f"**공고** {n.program_name or n.notice_id} " + " ".join(badges))
-        if n.is_expired(ctx.eval_date):
-            st.warning(f"접수 마감({n.apply_end}) · 다음 공고 대비 참고용. 안내문 생성은 막혀 있습니다.")
+        link = f" · [원문]({n.source_url})" if n.source_url else ""
+        st.markdown(f"**공고** {n.program_name or n.notice_id}{link} " + " ".join(badges))
+        state, msg = n.period_status(ctx.eval_date)
+        if state == "CLOSED":
+            st.warning(f"⚠️ 사업기간 아님 · {msg} 안내문 생성은 막혀 있습니다.")
+        elif state == "NOT_STARTED":
+            st.warning(f"⚠️ 사업기간 아님 · {msg}")
+        elif state == "UNKNOWN":
+            st.warning(f"⚠️ 접수기간 확인 불가 · {msg}")
     if o:
         extra = " · 검토필요 분류" if o.review_needed else ""
         st.caption(f"조례: {o.ordinance_name} ({o.effective_date}) · 규모 유형 {o.scale_rule_type}{extra}" + (f" · {o.note}" if o.note else ""))

@@ -104,6 +104,7 @@ class NoticeConditions(BaseModel):
     contact: Contact = Field(default_factory=Contact)
 
     source_type: SourceType = "OFFICIAL_NOTICE"
+    source_url: str | None = Field(None, alias="원문주소")  # 인터넷에서 찾은 공고면 그 주소
     reviewed: bool = False
     evidence: dict[str, str] = Field(default_factory=dict)
 
@@ -122,6 +123,25 @@ class NoticeConditions(BaseModel):
     def is_expired(self, today: date) -> bool:
         """접수 마감 여부. 종료일이 없으면 마감으로 보지 않는다(화면에서 '기간 미상' 표시)."""
         return self.apply_end is not None and today > self.apply_end
+
+    def period_status(self, today: date) -> tuple[str, str]:
+        """접수기간과 오늘을 비교. (상태, 안내문)
+
+        상태: OPEN(접수 중) · NOT_STARTED(접수 전) · CLOSED(마감) · UNKNOWN(기간 확인 불가).
+        날짜 칸이 비어 있으면 원문 기간(application_period)에서 다시 읽어 본다.
+        """
+        start, end = self.apply_start, self.apply_end
+        if start is None and end is None and self.application_period:
+            start, end = parse_period(self.application_period)
+        if end is not None and today > end:
+            return "CLOSED", f"접수가 끝난 공고입니다(접수 종료 {end}, 오늘 {today}). 다음 공고 대비 참고용으로만 쓰세요."
+        if start is not None and today < start:
+            return "NOT_STARTED", f"아직 접수 전입니다(접수 시작 {start}, 오늘 {today})."
+        if start is None and end is None:
+            return "UNKNOWN", "공고문에서 접수기간을 확인할 수 없습니다. 지금 신청을 받는 사업인지 원문·담당 부서에 확인하세요."
+        if end is None:
+            return "UNKNOWN", f"접수 시작({start})만 있고 종료일을 확인할 수 없습니다. 마감 여부를 원문에서 확인하세요."
+        return "OPEN", f"접수 중입니다({start or '?'} ~ {end})."
 
     def is_judgeable(self) -> bool:
         return self.business_type == BusinessType.APPLY_INSPECTION
