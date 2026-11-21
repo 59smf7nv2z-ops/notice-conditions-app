@@ -105,6 +105,7 @@ class NoticeConditions(BaseModel):
 
     source_type: SourceType = "OFFICIAL_NOTICE"
     source_url: str | None = Field(None, alias="원문주소")  # 인터넷에서 찾은 공고면 그 주소
+    source_urls: list[str] = Field(default_factory=list, alias="원문주소목록")  # 여러 글을 합쳤으면 모든 주소(첫째 = source_url)
     reviewed: bool = False
     evidence: dict[str, str] = Field(default_factory=dict)
 

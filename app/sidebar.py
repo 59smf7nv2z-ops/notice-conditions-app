@@ -6,6 +6,7 @@ from datetime import date
 
 import streamlit as st
 
+from app import region_picker
 from app.state import Ctx, clear
 from core import ordinances, regions
 from core.conditions import NoticeConditions
@@ -76,72 +77,53 @@ def _editor(n: NoticeConditions) -> None:
                 st.rerun()
 
 
+def _name(code: str) -> str:
+    loc = regions.locate(code)
+    return " ".join(x for x in loc if x) if loc else code
+
+
 def apply_region(codes: list[str], label: str = "", current: str | None = None) -> str:
-    """공고 지역을 다음 화면 갱신 때 검색 필터(시·도, 시·군·구, 법정동 전체)에 적용하도록 예약한다.
+    """공고 지역을 지역 선택(도·시·구, 읍·면·동 전체)에 적용한다. 다음에 그려지는 선택 위젯에 반영된다.
 
     일반구를 둔 시(예: 수원시 4개 구)는 첫 구를 열고 나머지 구 이름을 안내한다.
     current(지금 고른 시군구)가 공고 지역에 있으면 그 구를 연다. 반환: 화면 안내문.
     """
-    codes = [c for c in codes if regions.name_of(c)]
+    codes = [c for c in codes if regions.locate(c)]
     if not codes:
         return ""
     if current in codes:
         codes = [current] + [c for c in codes if c != current]
-    st.session_state["pending_region"] = codes
-    names = [regions.name_of(c) for c in codes]
-    head = f"공고 지역({label or names[0]})을 검색 필터에 적용했습니다: {names[0]} · 법정동 전체."
+    region_picker.select(codes[0], all_dongs=True)
+    st.session_state["notice_region_codes"] = codes  # 목록에 '공고 지역' 표시용
+    names = [_name(c) for c in codes]
+    head = f"공고 지역({label or names[0]})을 지역 선택에 적용했습니다: {names[0]} · 읍·면·동 전체."
     if len(codes) > 1:
-        head += f" 같은 공고 지역의 나머지 {len(codes) - 1}곳({', '.join(n.split(' ', 1)[1] for n in names[1:6])}" + (" 등" if len(codes) > 6 else "") + ")은 시·군·구에서 바꿔 고르세요."
+        rest = [n.rsplit(" ", 1)[-1] for n in names[1:6]]
+        head += f" 같은 공고 지역의 나머지 {len(codes) - 1}곳({', '.join(rest)}" + (" 등" if len(codes) > 6 else "") + ")은 구·군에서 바꿔 고르세요."
     return head
 
 
-def _take_pending_region() -> None:
-    """예약된 공고 지역·공고 선택을 위젯 값으로 넣는다(위젯을 만들기 전에 불러야 한다)."""
+def take_pending_notice() -> None:
+    """추출 직후 사이드바 '공고'에서 그 초안을 고른 상태로(위젯을 만들기 전에 불러야 한다)."""
     pick = st.session_state.pop("pending_notice", None)
     if pick:
         for code in pick[0]:
             st.session_state[f"notice-{code}-False"] = pick[1]
-    codes = st.session_state.pop("pending_region", None)
-    if not codes:
-        return
-    full = regions.name_of(codes[0]) or ""
-    sido = regions.sido_of(full)
-    sggs = regions.list_sigungu(sido)
-    disp = next((n for c, n in sggs if c == codes[0]), None)
-    if disp is None:
-        return
-    st.session_state["sb-sido"] = sido
-    st.session_state["sb-sgg"] = disp
-    st.session_state[f"all-{codes[0]}"] = True
-    st.session_state["notice_region_codes"] = codes  # 시·군·구 목록에 '공고 지역' 표시용
 
 
-def render() -> Ctx:
+def render() -> Ctx | None:
+    """사이드바. 지역(시군구)이 정해지지 않았으면 None."""
     sb = st.sidebar
+    if sb.button("← 처음 화면", use_container_width=True):
+        st.session_state["stage"] = "home"
+        st.rerun()
     sb.header("지역·조건")
-    _take_pending_region()
-    sidos = regions.list_sido()
-    if st.session_state.get("sb-sido") not in sidos:
-        st.session_state["sb-sido"] = "서울특별시" if "서울특별시" in sidos else sidos[0]
-    sido = sb.selectbox("시·도", sidos, key="sb-sido")
-    sggs = regions.list_sigungu(sido)
-    names = [n for _, n in sggs]
-    if st.session_state.get("sb-sgg") not in names:
-        st.session_state["sb-sgg"] = "종로구" if "종로구" in names else names[0]
-    marked = set(st.session_state.get("notice_region_codes") or [])
-    code_of = {n: c for c, n in sggs}
-    sgg_name = sb.selectbox("시·군·구", names, key="sb-sgg", format_func=lambda n: f"{n} · 공고 지역" if code_of[n] in marked else n)
-    sgg = code_of[sgg_name]
-
-    dongs = regions.list_bjdong(sgg)
-    dong_names = dict(dongs)
-    all_sel = sb.checkbox("법정동 전체 선택", key=f"all-{sgg}")
-    if all_sel:
-        bjds = [c for c, _ in dongs]
-        sb.caption(f"{len(bjds)}개 동 선택됨")
-    else:
-        default = [c for c, n in dongs if n == "청운동"][:1]
-        bjds = sb.multiselect("법정동(여러 개)", [c for c, _ in dongs], default=default, format_func=dong_names.get, key=f"dongs-{sgg}")
+    take_pending_notice()
+    reg = region_picker.render(sb, "sb", search=True)
+    if not reg.ready:
+        return None
+    sgg, sido, sgg_name = reg.sigungu_cd, reg.sido, reg.sigungu_name
+    bjds, dong_names, all_sel = reg.bjdong_cds, reg.bjdong_names, reg.all_selected
 
     eval_date = sb.date_input("판정 기준일", date.today(), format="YYYY-MM-DD")
 

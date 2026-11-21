@@ -296,3 +296,87 @@ def resolve_local_gov(text: str | None) -> dict:
     if len(found) > 1:
         return {"codes": [], "kind": "ambiguous", "label": rest, "candidates": found}
     return {**empty, "label": t}
+
+
+# ---------------------------------------------------------------- 도 → 시·군 → 구·군 → 동 선택
+
+def _metro(sido: str) -> bool:
+    """군을 구와 같은 단계에 두는 광역 단위(서울·광역시·세종). 시·군을 거느린 통합특별시는 도처럼 본다."""
+    return sido.endswith("광역시") or sido in ("서울특별시", "세종특별자치시")
+
+
+def split_sigungu(sido: str, name: str) -> tuple[str, str]:
+    """시군구 표시이름을 (시·군, 구·군) 두 단계로 나눈다. 해당 없는 단계는 ''.
+
+    '수원시 장안구' → ('수원시', '장안구'), '가평군' → ('가평군', ''), 서울 '종로구' → ('', '종로구'),
+    대구 '달성군'(광역시의 군) → ('', '달성군'), 세종 → ('', '').
+    """
+    if " " in name:
+        city, gu = name.split(" ", 1)
+        return city, gu
+    if name == sido:
+        return "", ""
+    if name.endswith("구") or (_metro(sido) and name.endswith("군")):
+        return "", name
+    return name, ""
+
+
+@lru_cache(maxsize=64)
+def sigungu_tree(sido: str) -> dict[str, list[tuple[str, str]]]:
+    """{시·군: [(sigunguCd, 구·군)]}. 시·군 단계가 없는 자치구·광역시 군은 '' 아래에 둔다."""
+    tree: dict[str, list[tuple[str, str]]] = {}
+    for code, name in list_sigungu(sido):
+        city, gu = split_sigungu(sido, name)
+        tree.setdefault(city, []).append((code, gu))
+    return tree
+
+
+@lru_cache(maxsize=1)
+def _locations() -> dict[str, tuple[str, str, str]]:
+    out = {}
+    for sido in list_sido():
+        for city, items in sigungu_tree(sido).items():
+            for code, gu in items:
+                out[code] = (sido, city, gu)
+    return out
+
+
+def locate(sigungu_cd: str) -> tuple[str, str, str] | None:
+    """sigunguCd → (시·도, 시·군, 구·군). 화면 목록에 없는 코드(폐지 등)는 None."""
+    return _locations().get(sigungu_cd)
+
+
+@dataclass(frozen=True)
+class RegionHit:
+    label: str  # '서울특별시 종로구 청운동'
+    sigungu_cd: str
+    bjdong_cd: str | None = None  # 동을 찾았으면 그 동
+
+
+@lru_cache(maxsize=1)
+def _search_rows() -> tuple[RegionHit, ...]:
+    rows: list[RegionHit] = []
+    for sido in list_sido():
+        for code, name in list_sigungu(sido):
+            base = name if name == sido else f"{sido} {name}"
+            rows.append(RegionHit(base, code))
+            rows += [RegionHit(f"{base} {dn}", code, bj) for bj, dn in list_bjdong(code)]
+    return tuple(rows)
+
+
+def search(query: str, limit: int = 30) -> list[RegionHit]:
+    """지역 이름 검색. 띄어 쓴 낱말이 모두 들어 있는 시군구·동(예: '수원 장안', '청운동', '대전 중구').
+
+    시군구가 동보다 앞, 낱말이 이름 끝과 꼭 맞을수록 앞.
+    """
+    words = [w for w in re.split(r"\s+", (query or "").strip()) if w]
+    if not words:
+        return []
+    hits = [h for h in _search_rows() if all(w in h.label for w in words)]
+    last = words[-1]
+
+    def rank(h: RegionHit) -> tuple:
+        tail = h.label.rsplit(" ", 1)[-1]
+        return (h.bjdong_cd is not None, not (tail == last or tail.startswith(last)), len(h.label))
+
+    return sorted(hits, key=rank)[:limit]

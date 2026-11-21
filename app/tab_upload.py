@@ -38,20 +38,23 @@ def _sigungu_options() -> dict[str, str]:
     return out
 
 
-def render() -> None:
-    st.subheader("공고 파일 올려 조건 추출")
+def upload_box(prefix: str = "work") -> None:
+    """공고 파일 올리기 + 추출 버튼(처음 화면·① 화면 공통)."""
     stt = factory.status("extract")
     if stt.is_mock:
         st.caption(f"지금은 샘플 모드라 파일을 외부로 보내지 않고 샘플 결과만 씁니다({stt.reason}).")
     else:
-        st.caption(f"실제 추출을 누르면 올린 공고 파일이 {stt.label}로 전송됩니다. 키가 없으면 샘플 결과만 씁니다.")
-
+        st.caption(f"추출을 누르면 올린 공고 파일이 {stt.label}로 전송됩니다. 추출한 지역·조건이 필터에 자동 적용됩니다.")
     files = st.file_uploader(
-        "공고 파일(여러 개 = 한 공고 묶음)", type=[e.lstrip(".") for e in ACCEPTED], accept_multiple_files=True, key="upload"
+        "공고 파일(여러 개 = 한 공고 묶음)", type=[e.lstrip(".") for e in ACCEPTED], accept_multiple_files=True, key=f"{prefix}-upload"
     )
-    if st.button("실제 추출", type="primary", disabled=not files):
+    if st.button("공고문에서 조건 추출", type="primary", disabled=not files, key=f"{prefix}-upload-run"):
         _run(files)
 
+
+def render() -> None:
+    st.subheader("공고 파일 올려 조건 추출")
+    upload_box("work")
     draft = st.session_state.get("draft")
     if draft:
         _editor(draft)
@@ -81,6 +84,8 @@ def _run(files) -> None:
         st.error(str(e))
         return
     region_msg = sidebar.apply_region(r.notice.sigungu_codes, r.notice.local_gov or "")
+    if r.notice.sigungu_codes:
+        st.session_state["pending_notice"] = (list(r.notice.sigungu_codes), r.notice.notice_id)
     st.session_state["draft"] = {
         "region": region_msg,
         "notice": r.notice,
@@ -107,7 +112,9 @@ def _editor(draft: dict) -> None:
         st.success(msg)
     else:
         st.warning(("⚠️ 접수기간 확인 불가 · " if state == "UNKNOWN" else "⚠️ 사업기간 아님 · ") + msg)
-    if n.source_url:
+    if draft.get("sources"):
+        st.markdown("**합친 글(인터넷 주소)**  \n" + "  \n".join(f"[출처 {i}] {kind} · [{title}]({url})" for i, title, url, kind in draft["sources"]))
+    elif n.source_url:
         st.markdown(f"**인터넷 주소** [{n.source_url}]({n.source_url})")
     if draft.get("region"):
         st.info(draft["region"])

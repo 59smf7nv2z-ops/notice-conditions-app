@@ -51,9 +51,18 @@ def fakes(monkeypatch):
     return calls
 
 
-def run_query(at: AppTest) -> AppTest:
+def open_work(sgg: str = "11110", dongs: list[str] | None = None, all_dongs: bool = False) -> AppTest:
+    """처음 화면을 건너뛰고 작업 화면을 연다(지역: 종로구 청운동)."""
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.session_state["region"] = {"sgg": sgg, "all": all_dongs, "dongs": dongs if dongs is not None else ["10100"], "v": 1}
+    at.session_state["stage"] = "work"
     at.run()
     assert not at.exception
+    return at
+
+
+def run_query(at: AppTest) -> AppTest:
     next(b for b in at.button if b.label == "조회·판정").click().run()
     assert not at.exception
     return at
@@ -63,16 +72,62 @@ def metric(at: AppTest, label: str) -> str:
     return next(m.value for m in at.metric if m.label == label)
 
 
-def test_first_screen_renders_without_network(fakes):
+def test_home_renders_region_picker_and_upload(fakes):
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
     assert not at.exception
-    assert at.segmented_control[0].value == "region"
-    assert fakes == []  # 누르기 전에는 조회하지 않는다
+    heads = " ".join(m.value for m in at.markdown)
+    assert "지역 선택" in heads and "공고문 직접 올리기" in heads
+    assert [s.label for s in at.selectbox][:3] == ["도·특별시·광역시", "시·군", "구·군"]
+    assert at.selectbox(key="home-city").disabled and at.selectbox(key="home-gu").disabled
+    assert not any(b.label == "조회·판정" for b in at.button) and fakes == []
+
+
+def test_home_cascade_doe_si_gu_dong_then_start(fakes):
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.selectbox(key="home-sido").set_value("경기도").run()
+    assert "수원시" in at.selectbox(key="home-city").options
+    at.selectbox(key="home-city").set_value("수원시").run()
+    assert at.selectbox(key="home-gu").options == ["장안구", "권선구", "팔달구", "영통구"]
+    at.selectbox(key="home-gu").set_value("장안구").run()
+    assert not at.exception
+    assert any("조례" in m.value for m in at.markdown)  # 조례 카드
+    start = next(b for b in at.button if b.label == "후보 건물 찾기 →")
+    assert start.disabled  # 동을 아직 안 고름
+    from core import regions
+
+    two = [c for c, _ in regions.list_bjdong("41111")[:2]]
+    at.multiselect(key="home-dongs-41111").set_value(two).run()
+    assert at.session_state["region"]["dongs"] == two
+    next(b for b in at.button if b.label == "후보 건물 찾기 →").click().run()
+    assert not at.exception and at.session_state["stage"] == "work"
+    assert at.selectbox(key="sb-gu").value == "장안구" and len(at.multiselect(key="sb-dongs-41111").value) == 2
+
+
+def test_home_search_picks_dongs_one_after_another(fakes):
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.text_input(key="home-q").input("청운동").run()
+    at.selectbox(key="home-hit").set_value(0).run()
+    assert at.session_state["region"]["sgg"] == "11110" and at.session_state["region"]["dongs"] == ["10100"]
+    assert at.selectbox(key="home-sido").value == "서울특별시" and at.selectbox(key="home-gu").value == "종로구"
+    at.text_input(key="home-q").input("종로 신교동").run()
+    at.selectbox(key="home-hit").set_value(0).run()
+    assert at.session_state["region"]["dongs"] == ["10100", "10200"]  # 같은 구 동은 쌓인다
+    assert not at.exception
+
+
+def test_metro_has_no_city_level(fakes):
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    at.selectbox(key="home-sido").set_value("대구광역시").run()
+    assert at.selectbox(key="home-city").disabled
+    assert "달성군" in at.selectbox(key="home-gu").options
 
 
 def test_query_judge_and_rerun_without_refetch(fakes):
-    at = run_query(AppTest.from_file(APP, default_timeout=60))
+    at = run_query(open_work())
     assert fakes == ["10100"]
     assert metric(at, "총 건물 수") == "4"
     # 조례(종로구, 규모 수치 없음) 기준: 30년 이상 2건 후보, 사용승인일 공란 1건 확인필요, 2015년 1건 비해당
@@ -83,7 +138,7 @@ def test_query_judge_and_rerun_without_refetch(fakes):
 
 
 def test_letters_and_map_sections_use_session_result(fakes):
-    at = run_query(AppTest.from_file(APP, default_timeout=60))
+    at = run_query(open_work())
     at.segmented_control[0].set_value("letters").run()
     assert not at.exception
     assert any("1건 미리보기" in m.value for m in at.markdown)
@@ -95,8 +150,7 @@ def test_letters_and_map_sections_use_session_result(fakes):
 
 
 def test_notice_section_renders(fakes):
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_work()
     at.segmented_control[0].set_value("notice").run()
     assert not at.exception
     heads = [s.value for s in at.subheader]
@@ -108,68 +162,77 @@ def test_missing_building_key_shows_error(fakes, monkeypatch):
         raise building_api.BuildingApiAuthError("NO_KEY", ".env에 BUILDING_API_KEY가 없습니다.")
 
     monkeypatch.setattr(building_api, "api_key", no_key)
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
-    assert not at.exception
+    at = open_work()
     assert any("BUILDING_API_KEY" in e.value for e in at.error)
 
 
-def test_notice_region_applied_to_sidebar_filter(fakes):
-    """공고 지역(수원시 = 구 4개)을 예약하면 시·도, 시·군·구, 법정동 전체 선택이 바뀐다."""
+def test_notice_region_applied_to_region_picker(fakes):
+    """공고 지역(수원시 = 구 4개) 적용: 도·시·구와 읍·면·동 전체가 바뀌고 같은 공고 지역에 표시가 붙는다."""
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
-    at.session_state["pending_region"] = ["41111", "41113", "41115", "41117"]
+    at.session_state["region"] = {"sgg": "41111", "all": True, "dongs": [], "v": 7}
+    at.session_state["notice_region_codes"] = ["41111", "41113", "41115", "41117"]
     at.run()
     assert not at.exception
-    assert at.selectbox(key="sb-sido").value == "경기도"
-    assert at.selectbox(key="sb-sgg").value == "수원시 장안구"
-    assert at.checkbox(key="all-41111").value is True
+    assert at.selectbox(key="home-sido").value == "경기도" and at.selectbox(key="home-city").value == "수원시"
+    assert at.selectbox(key="home-gu").value == "장안구" and at.checkbox(key="home-all-41111").value is True
 
 
-def test_upload_draft_shows_period_warning_and_region(fakes):
+def test_upload_draft_shows_period_warning_and_sources(fakes):
     from datetime import date
 
-    from app import sidebar  # noqa: F401  (화면 모듈 불러오기 확인)
     from core.conditions import NoticeConditions
 
     n = NoticeConditions(notice_id="daejeon-test", local_gov="대전광역시 중구", sigungu_codes=["30140"],
                          apply_start=date(2026, 9, 1), apply_end=date(2026, 9, 30), min_years=30)
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_work("30140", all_dongs=True)
     at.session_state["section"] = "notice"
     at.session_state["draft"] = {"notice": n, "issues": [], "classify": {"repair": False}, "provider": "mock:mock",
-                                 "usage": "", "region": "공고 지역(대전광역시 중구)을 검색 필터에 적용했습니다"}
-    at.session_state["pending_region"] = ["30140"]
+                                 "usage": "", "region": "공고 지역(대전광역시 중구)을 지역 선택에 적용했습니다",
+                                 "sources": [(1, "2026년 안전점검 신청 안내", "https://www.djjunggu.go.kr/1", "공고")]}
     at.run()
     assert not at.exception
     warnings = " ".join(w.value for w in at.warning)
     if date.today() > date(2026, 9, 30):
         assert "사업기간 아님" in warnings
-    assert any("검색 필터에 적용" in i.value for i in at.info)
-    assert at.selectbox(key="sb-sgg").value == "중구" and at.selectbox(key="sb-sido").value == "대전광역시"
+    assert any("지역 선택에 적용" in i.value for i in at.info)
+    assert any("[출처 1]" in m.value and "djjunggu" in m.value for m in at.markdown)
 
 
-def test_auto_hunt_opens_draft_with_url_and_selects_it(fakes, monkeypatch):
-    """지역을 고르면 찾은 공고가 바로 추출되어: 위에 인터넷 주소, 사이드바 '공고'에 초안 선택, 법정동 전체."""
+def _merged_result(url: str, sgg: str = "11110"):
     from core import notice_hunter as nh
+    from core import notice_merge
     from core.llm import extractor
     from core.llm.base import Part
     from core.llm.mock import MockProvider
 
-    url = "https://www.jongno.go.kr/notice/1"
     c, r = extractor.analyze([Part.of_text("공고")], MockProvider(), log=False)
-    r.notice = r.notice.model_copy(update={"source_url": url, "sigungu_codes": ["11110"], "notice_id": "jongno-auto"})
-    cand = nh.Candidate("2026년 소규모 노후 건축물 안전점검 신청 안내", url, "www.jongno.go.kr", "", "web", score=9)
-    res = nh.HuntResult("search", candidates=[cand], auto=nh.AutoExtract(candidate=cand, classify=c, extract=r))
+    r.notice = r.notice.model_copy(update={"source_url": url, "sigungu_codes": [sgg], "notice_id": "auto-notice"})
+    cand = nh.Candidate("2026년 소규모 노후 건축물 안전점검 신청 안내", url, nh.urlparse(url).netloc, "", "web", score=9, year=2026)
+    src = nh.SourceResult(cand, classify=c, extract=r, status="used")
+    merged = notice_merge.merge([notice_merge.MergeSource(r.notice, r.issues, url, cand.title, 2026)])
+    return nh.HuntResult("search", candidates=[cand], auto=nh.AutoExtract(sources=[src], merged=merged))
+
+
+def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
+    """구를 고르면 공고를 찾아 바로 추출: 위에 인터넷 주소, 읍·면·동 전체 적용, 작업 화면 사이드바 공고에 초안."""
+    from core import notice_hunter as nh
+
+    url = "https://www.jongno.go.kr/notice/1"
+    res = _merged_result(url)
     seen = []
     monkeypatch.setattr(nh, "hunt", lambda *a, **k: seen.append(a[0]) or res)
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
+    at.text_input(key="home-q").input("종로구").run()
+    at.selectbox(key="home-hit").set_value(0).run()
     assert not at.exception
     assert seen == ["11110"]  # 시군구마다 한 번
     top = " ".join(x.value for x in at.success) + " ".join(x.value for x in at.warning)
     assert url in top
-    assert at.selectbox(key="notice-11110-False").value == "jongno-auto"
-    assert at.checkbox(key="all-11110").value is True
-    at.run()
-    assert seen == ["11110"]  # 다시 그려도 다시 찾지 않음
+    assert at.checkbox(key="home-all-11110").value is True  # 공고 지역 → 동 전체
+    assert any("추출한 공고 조건" in m.value for m in at.markdown)
+    next(b for b in at.button if b.label == "후보 건물 찾기 →").click().run()
+    assert not at.exception
+    assert at.selectbox(key="notice-11110-False").value == "auto-notice"
+    assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음

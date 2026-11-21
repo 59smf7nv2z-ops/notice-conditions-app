@@ -228,6 +228,7 @@ SHARED_HOSTS = ("opengov.", "news.seoul.go.kr", "elis.go.kr", "law.go.kr", "moli
 LOCAL_GOV_HOST_RE = re.compile(r"\.go\.kr$|\.(seoul|busan|daegu|incheon|gwangju|daejeon|ulsan)\.kr$")
 FILE_URL_RE = re.compile(r"filedown|fileDownload|download\.|FileDown|DWN\.jsp", re.I)
 AUTO_MIN_SCORE = 5  # 자동 추출 기준: 올해 글(또는 작년 관공서 공고) 이상
+AUTO_MAX_SOURCES = 3  # 자동으로 합치는 글 수(글마다 LLM 1회)
 
 
 def _year_of(c: Candidate) -> int | None:
@@ -459,16 +460,49 @@ def extract_from_candidate(cand: Candidate, provider: LLMProvider, session: requ
 
 
 @dataclass
-class AutoExtract:
-    """검색 상위 글을 골라 바로 분류·추출한 결과."""
+class SourceResult:
+    """글 하나의 처리 결과."""
 
-    candidate: Candidate | None = None
+    candidate: Candidate
     page: PageContent | None = None
     classify: object | None = None  # extractor.ClassifyResult
     extract: object | None = None  # extractor.ExtractResult (안전점검 신청형일 때)
-    skipped: list[tuple[str, str]] = field(default_factory=list)  # (주소, 건너뛴 이유)
+    status: str = ""  # used | other_type | region_mismatch | skipped | error
+    reason: str = ""
+
+
+@dataclass
+class AutoExtract:
+    """여러 글을 분류·추출해 한 공고 조건으로 합친 결과(core.notice_merge)."""
+
+    sources: list[SourceResult] = field(default_factory=list)
+    merged: object | None = None  # notice_merge.Merged
     error: str = ""
-    region_mismatch: bool = False  # 추출한 지자체가 고른 지역과 다름
+
+    @property
+    def used(self) -> list[SourceResult]:
+        return [r for r in self.sources if r.status == "used"]
+
+    @property
+    def extract(self):
+        """합친 결과(extractor.ExtractResult 모양). 쓸 글이 없으면 None."""
+        if self.merged is None:
+            return None
+        from core.llm.extractor import ExtractResult
+
+        return ExtractResult(self.merged.notice, self.merged.issues)
+
+    @property
+    def skipped(self) -> list[tuple[str, str]]:
+        return [(r.candidate.url, r.reason) for r in self.sources if r.status in ("skipped", "error")]
+
+    @property
+    def region_mismatch(self) -> bool:
+        return not self.used and any(r.status == "region_mismatch" for r in self.sources)
+
+    @property
+    def usages(self) -> list:
+        return [r.classify.usage for r in self.sources if r.classify is not None]
 
 
 def auto_pick(cands: list[Candidate]) -> list[Candidate]:
@@ -476,35 +510,69 @@ def auto_pick(cands: list[Candidate]) -> list[Candidate]:
     return [c for c in cands if c.score >= AUTO_MIN_SCORE and not is_file_link(c)]
 
 
-def auto_extract(
-    cands: list[Candidate], provider: LLMProvider, sigungu_cd: str | None = None,
-    session: requests.Session | None = None, max_pages: int = 3,
-) -> AutoExtract:
-    """상위 글의 본문을 가져와 LLM 분류·추출을 한 번만 한다(비용 상한).
-
-    본문을 못 가져오거나(로봇 차단·접근 제한) 본문에 점검 이야기가 없으면 다음 글로(최대 max_pages개).
-    추출한 지자체가 고른 시군구와 다르면 region_mismatch(검색이 다른 지역 글을 고른 것).
-    """
+def process_source(
+    cand: Candidate, provider: LLMProvider, sigungu_cd: str | None = None, session: requests.Session | None = None,
+) -> SourceResult:
+    """글 하나: 본문 가져오기 → 분류·추출(LLM 1회) → 지역 확인."""
     from core.llm.base import LLMError
 
+    r = SourceResult(cand)
+    if is_file_link(cand):
+        r.status, r.reason = "skipped", "첨부파일 링크입니다(내려받아 직접 올리세요)"
+        return r
+    try:
+        r.page = fetch_page(cand.url, session)
+    except (HunterError, requests.RequestException) as e:
+        r.status, r.reason = "skipped", str(e) if isinstance(e, HunterError) else "페이지 연결 실패"
+        return r
+    if len(r.page.text) < 150 or "점검" not in r.page.text:
+        r.status, r.reason = "skipped", "본문에 공고 내용이 없습니다(첨부파일에만 있을 수 있음)"
+        return r
+    try:
+        _, r.classify, r.extract = extract_from_candidate(cand, provider, page=r.page)
+    except LLMError as e:
+        r.status, r.reason = "error", str(e)
+        return r
+    if r.extract is None:
+        from core.conditions import BUSINESS_TYPE_LABEL
+
+        r.status, r.reason = "other_type", f"'{BUSINESS_TYPE_LABEL[r.classify.business_type]}' 글이라 조건을 뽑지 않았습니다"
+    elif sigungu_cd and r.extract.notice.sigungu_codes and sigungu_cd not in r.extract.notice.sigungu_codes:
+        r.status, r.reason = "region_mismatch", f"다른 지역 글입니다({r.extract.notice.local_gov or '?'})"
+    else:
+        r.status = "used"
+    return r
+
+
+def extract_sources(
+    cands: list[Candidate], provider: LLMProvider, sigungu_cd: str | None = None,
+    session: requests.Session | None = None, max_sources: int = 3, max_tries: int = 5,
+    cache: dict | None = None,
+) -> AutoExtract:
+    """글 여러 개를 차례로 추출해(최대 max_sources건 성공, max_tries건 시도) 합친다.
+
+    cache: {주소: SourceResult}. 같은 글을 다시 고르면 LLM을 다시 부르지 않는다(세션 한정).
+    """
+    from core import notice_merge
+
     out = AutoExtract()
-    for cand in auto_pick(cands)[:max_pages]:
-        try:
-            page = fetch_page(cand.url, session)
-        except (HunterError, requests.RequestException) as e:
-            out.skipped.append((cand.url, str(e) if isinstance(e, HunterError) else "페이지 연결 실패"))
-            continue
-        if len(page.text) < 150 or "점검" not in page.text:
-            out.skipped.append((cand.url, "본문에 공고 내용이 없습니다(첨부파일에만 있을 수 있음)"))
-            continue
-        out.candidate, out.page = cand, page
-        try:
-            _, out.classify, out.extract = extract_from_candidate(cand, provider, page=page)
-        except LLMError as e:
-            out.error = str(e)
-        if out.extract is not None and sigungu_cd and out.extract.notice.sigungu_codes:
-            out.region_mismatch = sigungu_cd not in out.extract.notice.sigungu_codes
-        return out
+    for cand in cands[:max_tries]:
+        if len(out.used) >= max_sources:
+            break
+        if cache is not None and cand.url in cache:
+            r = cache[cand.url]
+        else:
+            r = process_source(cand, provider, sigungu_cd, session)
+            if cache is not None and r.status != "error":
+                cache[cand.url] = r
+        out.sources.append(r)
+    if out.used:
+        out.merged = notice_merge.merge([
+            notice_merge.MergeSource(r.extract.notice, r.extract.issues, r.candidate.url, r.candidate.title, r.candidate.year)
+            for r in out.used
+        ])
+    elif any(r.status == "error" for r in out.sources):
+        out.error = next(r.reason for r in out.sources if r.status == "error")
     return out
 
 
@@ -513,9 +581,9 @@ def auto_extract(
 
 def hunt(
     sigungu_cd: str, region_name: str, today: date, has_ordinance: bool,
-    session: requests.Session | None = None, auto_provider: LLMProvider | None = None,
+    session: requests.Session | None = None, auto_provider: LLMProvider | None = None, cache: dict | None = None,
 ) -> HuntResult:
-    """검수된 공고(접수 마감 전) → 네이버 검색 → (auto_provider가 있으면) 상위 글 바로 추출.
+    """검수된 공고(접수 마감 전) → 네이버 검색 → (auto_provider가 있으면) 올해 글 상위 몇 건을 추출해 합친다.
 
     region_name은 화면 표시용. 검색어는 시군구코드로 만든다(search_target).
     """
@@ -530,8 +598,9 @@ def hunt(
         return HuntResult("none", calls=calls, message="이 지역 공고를 찾지 못했습니다. " + _fallback(has_ordinance))
     res = HuntResult("search", candidates=cands, calls=calls, message=f"검색 후보 {len(cands)}건.")
     if auto_provider is not None:
-        if auto_pick(cands):
-            res.auto = auto_extract(cands, auto_provider, sigungu_cd, session)
+        picks = auto_pick(cands)
+        if picks:
+            res.auto = extract_sources(picks, auto_provider, sigungu_cd, session, max_sources=AUTO_MAX_SOURCES, cache=cache)
         else:
             res.message += " 올해 공고로 보이는 글이 없어 자동 추출은 하지 않았습니다. 링크를 골라 추출하세요."
     return res

@@ -103,11 +103,13 @@ def test_progress_reported():
     assert seen[-1] == 1.0
 
 
-def test_notice_loader_and_selection():
-    ns = load_notices()
-    gj = notices_for("12210", ns)
-    assert gj and gj[0].notice_id == "gwangju-donggu-legacy-condition"
-    assert gj[0].reviewed is False
+def test_notice_loader_and_selection(tmp_path):
+    assert load_notices(tmp_path) == []  # 저장된 공고 없음(데모 공고는 지웠다)
+    (tmp_path / "gj.json").write_text(
+        NoticeConditions(notice_id="gj", sigungu_codes=["12210"]).model_dump_json(), encoding="utf-8"
+    )
+    ns = load_notices(tmp_path)
+    assert notices_for("12210", ns)[0].notice_id == "gj" and ns[0].reviewed is False
     assert notices_for("11110", ns) == []
 
     a = NoticeConditions(notice_id="a", sigungu_codes=["11110"], apply_start=date(2025, 3, 1))

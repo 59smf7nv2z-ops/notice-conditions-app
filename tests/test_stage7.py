@@ -165,8 +165,35 @@ def test_hunt_auto_extracts_top_candidate(hub_env, monkeypatch):
 def test_auto_extract_skips_blocked_pages(hub_env):
     blocked = nh.Candidate("2026년 소규모 노후 건축물 안전점검 신청", "https://gu.example.go.kr/a", "gu.example.go.kr", "", "web", score=9)
     responses.get("https://gu.example.go.kr/robots.txt", body="User-agent: *\nDisallow: /\n")
-    a = nh.auto_extract([blocked], MockProvider())
+    a = nh.extract_sources([blocked], MockProvider())
     assert a.extract is None and a.skipped and "robots" in a.skipped[0][1]
+
+
+@responses.activate
+def test_extract_sources_merges_and_caches(hub_env):
+    long_page = PAGE.replace("</body>", "<p>" + "접수기간 2026. 7. 1. ~ 7. 31. 방문 또는 우편 신청. " * 5 + "</p></body>")
+    urls = ["https://www.djjunggu.go.kr/bbs/1", "https://news.example.com/articleView.html?idxno=2"]
+    for u in urls:
+        host = nh.urlparse(u).netloc
+        responses.get(f"https://{host}/robots.txt", status=404)
+        responses.get(u, body=long_page, content_type="text/html; charset=utf-8")
+    cands = [nh.Candidate("2026년 안전점검 신청 안내", urls[0], "www.djjunggu.go.kr", "", "web", score=9, year=2026),
+             nh.Candidate("대전 중구 안전점검", urls[1], "news.example.com", "2026-03-01", "news", score=5, year=2026)]
+    cache: dict = {}
+    a = nh.extract_sources(cands, MockProvider(), "30140", max_sources=2, cache=cache)
+    assert len(a.used) == 2 and a.merged is not None
+    assert a.merged.notice.source_urls == urls and a.merged.notice.source_url == urls[0]
+    assert a.extract.notice.sigungu_codes == ["30140"] and a.extract.issues[0].startswith("글 2건을 합쳤습니다")
+    n_calls = len(responses.calls)
+    a2 = nh.extract_sources(cands, MockProvider(), "30140", max_sources=2, cache=cache)
+    assert len(responses.calls) == n_calls and len(a2.used) == 2  # 같은 글은 다시 가져오지 않음
+
+
+def test_extract_sources_marks_other_region(hub_env, monkeypatch):
+    cand = nh.Candidate("2026년 안전점검 신청 안내", "https://x.example.go.kr/1", "x.example.go.kr", "", "web", score=9)
+    monkeypatch.setattr(nh, "fetch_page", lambda url, session=None: nh.PageContent(url, "소규모 노후건축물 안전점검 신청 " * 20, []))
+    a = nh.extract_sources([cand], MockProvider(), "11110")  # 목업 결과는 대전 중구
+    assert a.merged is None and a.region_mismatch and a.sources[0].status == "region_mismatch"
 
 
 def test_hunt_without_keys_falls_back(monkeypatch):
