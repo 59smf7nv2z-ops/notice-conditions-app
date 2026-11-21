@@ -99,23 +99,83 @@ def draft_card(sgg: str | None) -> None:
         _go("notice")
 
 
-def render() -> None:
-    st.markdown(HERO, unsafe_allow_html=True)
-    left, right = st.columns([3, 2], gap="large")
-    with left, st.container(border=True):
-        st.markdown("#### 지역 선택")
+MODE_KEY = "home_mode"  # None | "region" | "upload"
+CHOICES = {
+    "region": (":material/location_on:", "지역 선택", "도·시·구·동을 고르면 조례와 공고를 자동으로 찾습니다"),
+    "upload": (":material/upload_file:", "공고문 직접 올리기", "가진 공고 파일에서 조건과 지역을 바로 뽑습니다"),
+}
+
+# 고르기 카드 + 펼침 애니메이션. 펼친 칸은 처음 그려질 때만 내려오며 나타난다(같은 칸 안의 조작에는 다시 움직이지 않음)
+CSS = """
+<style>
+@keyframes home-drop {
+  from { opacity: 0; transform: translateY(-14px) scaleY(0.96); clip-path: inset(0 0 100% 0); }
+  to   { opacity: 1; transform: none; clip-path: inset(0 0 0 0); }
+}
+[class*="st-key-home-pick-"] button {
+  min-height: 112px; width: 100%; padding: 18px 22px; border-radius: 14px;
+  justify-content: flex-start; text-align: left; white-space: normal;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .18s ease;
+}
+[class*="st-key-home-pick-"] button p { font-size: 1.05rem; line-height: 1.45; }
+[class*="st-key-home-pick-"] button div, [class*="st-key-home-pick-"] button p {
+  white-space: normal; overflow: visible; text-overflow: clip; text-align: left;
+}
+[class*="st-key-home-pick-"] button:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+[class*="st-key-home-pick-"] button::after {
+  content: "expand_more"; font-family: "Material Symbols Rounded"; font-size: 1.6rem; margin-left: auto; padding-left: 12px;
+  transition: transform .3s ease;
+}
+.home-or { display: flex; align-items: center; justify-content: center; height: 112px; }
+.home-or span { padding: 6px 14px; border-radius: 999px; font-weight: 700; font-size: .95rem;
+  background: rgba(127,127,127,.14); }
+.st-key-home-panel-region, .st-key-home-panel-upload {
+  animation: home-drop .38s cubic-bezier(.2,.8,.2,1) both; transform-origin: top center;
+}
+@media (max-width: 640px) { .home-or { height: auto; padding: 2px 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .st-key-home-panel-region, .st-key-home-panel-upload { animation: none; }
+  [class*="st-key-home-pick-"] button, [class*="st-key-home-pick-"] button::after { transition: none; }
+}
+</style>
+"""
+
+
+def _pick(mode: str) -> None:
+    st.session_state[MODE_KEY] = None if st.session_state.get(MODE_KEY) == mode else mode  # 다시 누르면 접기
+
+
+def choice_buttons() -> str | None:
+    mode = st.session_state.get(MODE_KEY)
+    st.markdown(CSS, unsafe_allow_html=True)
+    if mode:  # 고른 카드의 화살표를 뒤집는다(버튼은 화면에 남아 있어 회전이 부드럽게 보인다)
+        st.markdown(f"<style>.st-key-home-pick-{mode} button::after{{transform:rotate(180deg)}}</style>", unsafe_allow_html=True)
+    left, mid, right = st.columns([10, 2, 10], vertical_alignment="center")
+    for col, m in ((left, "region"), (right, "upload")):
+        icon, title, desc = CHOICES[m]
+        col.button(
+            f"**{title}**  \n{desc}", key=f"home-pick-{m}", icon=icon, on_click=_pick, args=(m,),
+            type="primary" if mode == m else "secondary", use_container_width=True,
+        )
+    mid.markdown('<div class="home-or"><span>또는</span></div>', unsafe_allow_html=True)
+    return mode
+
+
+def _start_row(ready: bool, ready_msg: str, wait_msg: str) -> None:
+    st.divider()
+    a, b = st.columns([1, 2])
+    if a.button("후보 건물 찾기 →", type="primary", disabled=not ready, use_container_width=True):
+        _go("region")
+    b.caption(ready_msg if ready else wait_msg)
+
+
+def _region_panel() -> None:
+    with st.container(border=True, key="home-panel-region"):
         st.caption("도 → 시·군 → 구·군 → 읍·면·동 순서로 고르거나, 이름으로 찾으세요. 동은 여러 개 고를 수 있습니다.")
         reg = region_picker.render(st, "home")
         tab_hunt.auto_toggle(st, "home")
-    with right, st.container(border=True):
-        st.markdown("#### 공고문 직접 올리기")
-        st.caption("HWP·HWPX·PDF·DOCX·XLSX·이미지. 여러 파일이면 한 공고로 묶어 추출합니다.")
-        tab_upload.upload_box("home")
-
     if not reg.ready:
-        draft_card(None)
         return
-
     o = ordinances.get_ordinance(reg.sigungu_cd)
     res = tab_hunt.ensure(reg.sigungu_cd, reg.label, date.today(), o is not None)
 
@@ -129,13 +189,40 @@ def render() -> None:
         draft_card(reg.sigungu_cd)
     with st.expander("공고 검색 결과 · 여러 글을 골라 조건 합치기", expanded=bool(res and res.stage == "search" and not (res.auto and res.auto.merged))):
         tab_hunt.panel(reg.sigungu_cd, reg.label, date.today(), o is not None, "home")
-
-    st.divider()
-    ready = bool(reg.bjdong_cds)
-    a, b = st.columns([1, 2])
-    if a.button("후보 건물 찾기 →", type="primary", disabled=not ready, use_container_width=True):
-        _go("region")
-    b.caption(
-        f"{reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳 선택. 다음 화면에서 '조회·판정'으로 건축물대장을 조회합니다."
-        if ready else "읍·면·동을 하나 이상 고르거나 '전체'를 켜세요."
+    _start_row(
+        bool(reg.bjdong_cds),
+        f"{reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳 선택. 다음 화면에서 '조회·판정'으로 건축물대장을 조회합니다.",
+        "읍·면·동을 하나 이상 고르거나 '전체'를 켜세요.",
     )
+
+
+def _upload_panel() -> None:
+    with st.container(border=True, key="home-panel-upload"):
+        st.caption("HWP·HWPX·PDF·DOCX·XLSX·이미지. 여러 파일이면 한 공고로 묶어 추출합니다. 공고의 지자체가 지역 선택에 자동으로 들어갑니다.")
+        tab_upload.upload_box("home")
+    draft = st.session_state.get("draft")
+    if not draft or draft.get("origin") != "upload":
+        return
+    reg = region_picker.current()
+    c1, c2 = st.columns([2, 3], gap="large")
+    with c2, st.container(border=True):
+        draft_card(None)
+    with c1, st.container(border=True):
+        if reg.ready:
+            st.markdown(f"**지역** {reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳")
+            st.caption("동을 바꾸려면 위에서 '지역 선택'을 누르세요(공고에서 읽은 지역이 들어 있습니다).")
+            ordinance_card(ordinances.get_ordinance(reg.sigungu_cd))
+        else:
+            st.warning("공고에서 지자체를 찾지 못했습니다. 위에서 '지역 선택'을 눌러 지역을 고르세요.")
+    _start_row(reg.ready and bool(reg.bjdong_cds), f"{reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳.", "지역을 먼저 고르세요.")
+
+
+def render() -> None:
+    st.markdown(HERO, unsafe_allow_html=True)
+    mode = choice_buttons()
+    if mode == "region":
+        _region_panel()
+    elif mode == "upload":
+        _upload_panel()
+    else:
+        st.caption("둘 중 하나를 고르세요. 나중에 다른 쪽으로 바꿔도 고른 지역·추출한 조건은 그대로 남습니다.")

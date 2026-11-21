@@ -72,20 +72,33 @@ def metric(at: AppTest, label: str) -> str:
     return next(m.value for m in at.metric if m.label == label)
 
 
-def test_home_renders_region_picker_and_upload(fakes):
+def open_home(mode: str | None = "region") -> AppTest:
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
+    if mode:
+        at.button(key=f"home-pick-{mode}").click().run()
     assert not at.exception
-    heads = " ".join(m.value for m in at.markdown)
-    assert "지역 선택" in heads and "공고문 직접 올리기" in heads
+    return at
+
+
+def test_home_choose_one_of_region_or_upload(fakes):
+    at = open_home(None)
+    labels = " ".join(b.label for b in at.button)
+    assert "지역 선택" in labels and "공고문 직접 올리기" in labels and any("또는" in m.value for m in at.markdown)
+    assert not at.selectbox and not at.get("file_uploader")  # 고르기 전에는 둘 다 접혀 있음
+    at.button(key="home-pick-region").click().run()
     assert [s.label for s in at.selectbox][:3] == ["도·특별시·광역시", "시·군", "구·군"]
     assert at.selectbox(key="home-city").disabled and at.selectbox(key="home-gu").disabled
-    assert not any(b.label == "조회·판정" for b in at.button) and fakes == []
+    assert not at.get("file_uploader")
+    at.button(key="home-pick-upload").click().run()  # 다른 쪽을 고르면 바뀐다
+    assert at.get("file_uploader") and not any(s.label == "도·특별시·광역시" for s in at.selectbox)
+    at.button(key="home-pick-upload").click().run()  # 같은 쪽을 다시 누르면 접힘
+    assert not at.get("file_uploader")
+    assert not any(b.label == "조회·판정" for b in at.button) and fakes == [] and not at.exception
 
 
 def test_home_cascade_doe_si_gu_dong_then_start(fakes):
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_home()
     at.selectbox(key="home-sido").set_value("경기도").run()
     assert "수원시" in at.selectbox(key="home-city").options
     at.selectbox(key="home-city").set_value("수원시").run()
@@ -106,8 +119,7 @@ def test_home_cascade_doe_si_gu_dong_then_start(fakes):
 
 
 def test_home_search_picks_dongs_one_after_another(fakes):
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_home()
     at.text_input(key="home-q").input("청운동").run()
     at.selectbox(key="home-hit").set_value(0).run()
     assert at.session_state["region"]["sgg"] == "11110" and at.session_state["region"]["dongs"] == ["10100"]
@@ -119,8 +131,7 @@ def test_home_search_picks_dongs_one_after_another(fakes):
 
 
 def test_metro_has_no_city_level(fakes):
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_home()
     at.selectbox(key="home-sido").set_value("대구광역시").run()
     assert at.selectbox(key="home-city").disabled
     assert "달성군" in at.selectbox(key="home-gu").options
@@ -168,8 +179,7 @@ def test_missing_building_key_shows_error(fakes, monkeypatch):
 
 def test_notice_region_applied_to_region_picker(fakes):
     """공고 지역(수원시 = 구 4개) 적용: 도·시·구와 읍·면·동 전체가 바뀌고 같은 공고 지역에 표시가 붙는다."""
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_home()
     at.session_state["region"] = {"sgg": "41111", "all": True, "dongs": [], "v": 7}
     at.session_state["notice_region_codes"] = ["41111", "41113", "41115", "41117"]
     at.run()
@@ -222,8 +232,7 @@ def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
     res = _merged_result(url)
     seen = []
     monkeypatch.setattr(nh, "hunt", lambda *a, **k: seen.append(a[0]) or res)
-    at = AppTest.from_file(APP, default_timeout=60)
-    at.run()
+    at = open_home()
     at.text_input(key="home-q").input("종로구").run()
     at.selectbox(key="home-hit").set_value(0).run()
     assert not at.exception
@@ -236,3 +245,25 @@ def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
     assert not at.exception
     assert at.selectbox(key="notice-11110-False").value == "auto-notice"
     assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음
+
+
+def test_uploaded_draft_is_not_overwritten_by_auto_search(fakes, monkeypatch):
+    """공고문을 올려 추출한 뒤 지역 선택으로 가도 자동 검색은 검색만 한다(올린 공고 조건을 지키기)."""
+    from core import notice_hunter as nh
+    from core.conditions import NoticeConditions
+
+    calls = []
+    monkeypatch.setattr(nh, "hunt", lambda *a, **k: calls.append(k.get("auto_provider")) or nh.HuntResult("none", message="없음"))
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    n = NoticeConditions(notice_id="uploaded", sigungu_codes=["11110"], min_years=30)
+    at = open_home("upload")
+    at.session_state["draft"] = {"origin": "upload", "notice": n, "issues": [], "classify": {"repair": False},
+                                 "provider": "mock:mock", "usage": "", "region": ""}
+    at.session_state["region"] = {"sgg": "11110", "all": True, "dongs": [], "v": 3}
+    at.run()
+    assert any("추출한 공고 조건" in m.value for m in at.markdown)
+    assert next(b for b in at.button if b.label == "후보 건물 찾기 →").disabled is False
+    at.button(key="home-pick-region").click().run()
+    assert not at.exception and calls == [None]  # LLM 추출 없이 검색만
+    assert at.session_state["draft"]["notice"].notice_id == "uploaded"

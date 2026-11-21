@@ -69,6 +69,9 @@ def ensure(sgg: str, label: str, eval_date: date, has_ordinance: bool) -> nh.Hun
     if st.session_state.get(AUTO_KEY, True) and sgg not in hunts:
         stt = factory.status("extract")
         provider = None if stt.is_mock else factory.get_provider("extract")  # 샘플 모드에선 검색만(샘플 조건이 실제처럼 보이지 않게)
+        draft = st.session_state.get("draft") or {}
+        if draft.get("origin") == "upload" and sgg in draft["notice"].sigungu_codes:
+            provider = None  # 올린 공고문에서 뽑은 조건이 있으면 검색만 한다(덮어쓰지 않음)
         with st.spinner(f"{label} 공고 찾는 중" + ("" if provider is None else " · 찾으면 바로 조건 추출")):
             try:
                 res = nh.hunt(sgg, label, eval_date, has_ordinance, auto_provider=provider, cache=_cache())

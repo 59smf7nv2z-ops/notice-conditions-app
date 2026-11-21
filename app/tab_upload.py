@@ -87,6 +87,7 @@ def _run(files) -> None:
     if r.notice.sigungu_codes:
         st.session_state["pending_notice"] = (list(r.notice.sigungu_codes), r.notice.notice_id)
     st.session_state["draft"] = {
+        "origin": "upload",  # 공고 자동 검색이 이 초안을 덮어쓰지 않게
         "region": region_msg,
         "notice": r.notice,
         "issues": r.issues,
