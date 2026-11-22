@@ -6,7 +6,7 @@ from datetime import date
 
 import streamlit as st
 
-from app import region_picker
+from app import region_picker, wheel_picker
 from app.state import Ctx, clear
 from core import ordinances, regions
 from core.conditions import NoticeConditions
@@ -19,7 +19,7 @@ NO_NOTICE = "__none__"
 def _bound_select(container, label: str, value: str, key: str) -> str:
     opts = ["LE", "LT"]
     names = {"LE": "이하", "LT": "미만"}
-    return container.selectbox(label, opts, index=opts.index(value), format_func=names.get, key=key)
+    return wheel_picker.wheel_select(container, label, opts, index=opts.index(value), format_func=names.get, key=key)
 
 
 def _editor(n: NoticeConditions) -> None:
@@ -140,7 +140,7 @@ def render() -> Ctx | None:
     if is_draft:
         labels[draft.notice_id] = "추출 초안 · " + labels[draft.notice_id]
     order = [n.notice_id for n in pool] + [NO_NOTICE]  # 접수 시작일이 최신인 공고가 기본
-    chosen = sb.selectbox("공고", order, format_func=labels.get, key=f"notice-{sgg}-{test_mode}")
+    chosen = wheel_picker.wheel_select(sb, "공고", order, format_func=labels.get, key=f"notice-{sgg}-{test_mode}", font_size=".9rem")
     notice = next((n for n in pool if n.notice_id == chosen), None)
     is_test = bool(test_mode and notice and sgg not in notice.sigungu_codes)
 

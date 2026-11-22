@@ -16,6 +16,7 @@ import streamlit as st
 from folium.plugins import BeautifyIcon, MarkerCluster
 from streamlit_folium import st_folium
 
+from app import wheel_picker
 from app.state import Ctx
 from app.tab_region import detail_panel
 from core import boundaries, geocode, regions
@@ -217,8 +218,8 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
         if pick is not None and not parcels.empty and (parcels["parcel_key"] == pick).any():
             rows = parcels[parcels["parcel_key"] == pick]
             if len(rows) > 1:
-                i = st.selectbox(
-                    f"이 필지의 건물 {len(rows)}동", range(len(rows)),
+                i = wheel_picker.wheel_select(
+                    st, f"이 필지의 건물 {len(rows)}동", range(len(rows)), key=f"map-bldg-{pick}",
                     format_func=lambda j: f"{rows.iloc[j]['dongNm'] or '동명 없음'} · {STATUS_LABEL[rows.iloc[j]['status']]}",
                 )
             else:

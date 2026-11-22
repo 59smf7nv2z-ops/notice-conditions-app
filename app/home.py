@@ -202,7 +202,7 @@ def _start_row(ready: bool, ready_msg: str, wait_msg: str, sgg: str | None = Non
 def _region_panel() -> None:
     with st.container(border=True, key="home-panel-region"):
         st.caption("도 → 시·군 → 구·군 → 읍·면·동 순서로 고르거나, 이름으로 찾으세요. 동은 여러 개 고를 수 있습니다.")
-        reg = region_picker.render(st, "home")
+        reg = region_picker.render(st, "home", row=True)
         clicked = False
         if reg.ready:
             b, c = st.columns([1, 2], vertical_alignment="center")

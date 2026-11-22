@@ -62,6 +62,51 @@ def notice_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+class FakeWheels:
+    """처음 화면 휠 대신: 마지막으로 그린 휠(옵션·비활성)을 기록하고, pick()으로 고른 값을 다음 실행에 돌려준다."""
+
+    def __init__(self):
+        self.shown: dict[str, dict] = {}
+        self.picks: dict[str, object] = {}
+
+    def __call__(self, label, options, value, *, key, format_func=str, disabled=False, placeholder="", **_):
+        from app import wheel_picker
+
+        self.shown[key] = {"label": label, "options": list(options), "value": value, "disabled": disabled,
+                           "reveal": _.get("reveal", False)}
+        return self.picks.pop(key, wheel_picker.NOTHING)
+
+    def pick(self, at, k: str, value):
+        self.picks[f"home-{k}-wheel"] = value
+        at.run()
+
+    def hit(self, at, q: str, i: int = 0):
+        """검색어 q의 결과 휠에서 i번째를 고른다."""
+        self.picks[f"home-hit-wheel-{q}"] = i
+        at.run()
+
+    def opts(self, k: str) -> list:
+        return self.shown[f"home-{k}-wheel"]["options"]
+
+    def off(self, k: str) -> bool:
+        return self.shown[f"home-{k}-wheel"]["disabled"]
+
+    def reveal(self, k: str) -> bool:
+        return self.shown[f"home-{k}-wheel"]["reveal"]
+
+    def val(self, k: str):
+        return self.shown[f"home-{k}-wheel"]["value"]
+
+
+@pytest.fixture
+def wheels(monkeypatch):
+    from app import wheel_picker
+
+    fake = FakeWheels()
+    monkeypatch.setattr(wheel_picker, "wheel", fake)
+    return fake
+
+
 def open_work(sgg: str = "11110", dongs: list[str] | None = None, all_dongs: bool = False) -> AppTest:
     """처음 화면을 건너뛰고 작업 화면을 연다(지역: 종로구 청운동)."""
     at = AppTest.from_file(APP, default_timeout=60)
@@ -92,30 +137,34 @@ def open_home(mode: str | None = "region") -> AppTest:
     return at
 
 
-def test_home_choose_one_of_region_or_upload(fakes):
+def test_home_choose_one_of_region_or_upload(fakes, wheels):
     at = open_home(None)
     labels = " ".join(b.label for b in at.button)
     assert "지역 선택" in labels and "공고문 직접 올리기" in labels and any("또는" in m.value for m in at.markdown)
-    assert not at.selectbox and not at.get("file_uploader")  # 고르기 전에는 둘 다 접혀 있음
+    assert not wheels.shown and not at.get("file_uploader")  # 고르기 전에는 둘 다 접혀 있음
     at.button(key="home-pick-region").click().run()
-    assert [s.label for s in at.selectbox][:3] == ["도·특별시·광역시", "시·군", "구·군"]
-    assert at.selectbox(key="home-city").disabled and at.selectbox(key="home-gu").disabled
+    assert list(wheels.shown) == ["home-sido-wheel"]  # 도를 고르기 전에는 시·군·구·군 휠이 없다
+    assert wheels.shown["home-sido-wheel"]["label"] == "도·특별시·광역시"
+    wheels.pick(at, "sido", "경기도")
+    assert "home-city-wheel" in wheels.shown and "home-gu-wheel" not in wheels.shown  # 도 → 시·군이 나온다
+    assert wheels.reveal("city") and not wheels.reveal("sido")  # 다음 휠은 미끄러져 나온다
     assert not at.get("file_uploader")
+    wheels.shown.clear()
     at.button(key="home-pick-upload").click().run()  # 다른 쪽을 고르면 바뀐다
-    assert at.get("file_uploader") and not any(s.label == "도·특별시·광역시" for s in at.selectbox)
+    assert at.get("file_uploader") and not wheels.shown
     at.button(key="home-pick-upload").click().run()  # 같은 쪽을 다시 누르면 접힘
     assert not at.get("file_uploader")
     assert not any(b.label == "조회·판정" for b in at.button) and fakes == [] and not at.exception
 
 
-def test_home_cascade_doe_si_gu_dong_then_start(fakes):
+def test_home_cascade_doe_si_gu_dong_then_start(fakes, wheels):
     at = open_home()
-    at.selectbox(key="home-sido").set_value("경기도").run()
-    assert "수원시" in at.selectbox(key="home-city").options
-    at.selectbox(key="home-city").set_value("수원시").run()
-    assert at.selectbox(key="home-gu").options == ["장안구", "권선구", "팔달구", "영통구"]
-    at.selectbox(key="home-gu").set_value("장안구").run()
-    assert not at.exception
+    wheels.pick(at, "sido", "경기도")
+    assert "수원시" in wheels.opts("city") and not wheels.off("city")
+    wheels.pick(at, "city", "수원시")
+    assert wheels.opts("gu") == ["장안구", "권선구", "팔달구", "영통구"]
+    wheels.pick(at, "gu", "장안구")
+    assert not at.exception and at.session_state["region"]["sgg"] == "41111"
     assert not any("점검 대상" in m.value for m in at.markdown)  # 고르기만 해서는 검색하지 않음
     at.button(key="home-search").click().run()
     assert any("점검 대상" in m.value for m in at.markdown)  # 조례 카드
@@ -128,26 +177,38 @@ def test_home_cascade_doe_si_gu_dong_then_start(fakes):
     assert at.session_state["region"]["dongs"] == two
     at.button(key="home-start").click().run()
     assert not at.exception and at.session_state["stage"] == "work"
-    assert at.selectbox(key="sb-gu").value == "장안구" and len(at.multiselect(key="sb-dongs-41111").value) == 2
+    assert at.session_state["sb-gu"] == "장안구" and len(at.multiselect(key="sb-dongs-41111").value) == 2
 
 
-def test_home_search_picks_dongs_one_after_another(fakes):
+def test_home_wheel_change_resets_lower_levels(fakes, wheels):
+    """도를 바꾸면 시·군·구·군은 비고(자리 표시), 고른 지역도 풀린다."""
+    at = open_home()
+    wheels.pick(at, "sido", "경기도")
+    wheels.pick(at, "city", "수원시")
+    wheels.pick(at, "gu", "장안구")
+    wheels.shown.clear()
+    wheels.pick(at, "sido", "강원특별자치도")
+    assert wheels.val("city") is None and "home-gu-wheel" not in wheels.shown
+    assert at.session_state["region"]["sgg"] is None and not at.exception
+
+
+def test_home_search_picks_dongs_one_after_another(fakes, wheels):
     at = open_home()
     at.text_input(key="home-q").input("청운동").run()
-    at.selectbox(key="home-hit").set_value(0).run()
+    wheels.hit(at, "청운동")
     assert at.session_state["region"]["sgg"] == "11110" and at.session_state["region"]["dongs"] == ["10100"]
-    assert at.selectbox(key="home-sido").value == "서울특별시" and at.selectbox(key="home-gu").value == "종로구"
+    assert wheels.val("sido") == "서울특별시" and wheels.val("gu") == "종로구"  # 휠이 검색 결과로 굴러간다
     at.text_input(key="home-q").input("종로 신교동").run()
-    at.selectbox(key="home-hit").set_value(0).run()
+    wheels.hit(at, "종로 신교동")
     assert at.session_state["region"]["dongs"] == ["10100", "10200"]  # 같은 구 동은 쌓인다
     assert not at.exception
 
 
-def test_metro_has_no_city_level(fakes):
+def test_metro_has_no_city_level(fakes, wheels):
     at = open_home()
-    at.selectbox(key="home-sido").set_value("대구광역시").run()
-    assert at.selectbox(key="home-city").disabled
-    assert "달성군" in at.selectbox(key="home-gu").options
+    wheels.pick(at, "sido", "대구광역시")
+    assert "home-city-wheel" not in wheels.shown  # 광역시는 시·군 단계 없이
+    assert "달성군" in wheels.opts("gu")          # 바로 구·군 휠
 
 
 def test_query_judge_and_rerun_without_refetch(fakes):
@@ -188,15 +249,15 @@ def test_missing_building_key_shows_error(fakes, monkeypatch):
     assert any("BUILDING_API_KEY" in e.value for e in at.error)
 
 
-def test_notice_region_applied_to_region_picker(fakes):
+def test_notice_region_applied_to_region_picker(fakes, wheels):
     """공고 지역(수원시 = 구 4개) 적용: 도·시·구와 읍·면·동 전체가 바뀌고 같은 공고 지역에 표시가 붙는다."""
     at = open_home()
     at.session_state["region"] = {"sgg": "41111", "all": True, "dongs": [], "v": 7}
     at.session_state["notice_region_codes"] = ["41111", "41113", "41115", "41117"]
     at.run()
     assert not at.exception
-    assert at.selectbox(key="home-sido").value == "경기도" and at.selectbox(key="home-city").value == "수원시"
-    assert at.selectbox(key="home-gu").value == "장안구" and at.checkbox(key="home-all-41111").value is True
+    assert wheels.val("sido") == "경기도" and wheels.val("city") == "수원시"
+    assert wheels.val("gu") == "장안구" and at.checkbox(key="home-all-41111").value is True
 
 
 def test_home_review_editor_shows_period_warning_and_sources(fakes):
@@ -237,7 +298,7 @@ def _merged_result(url: str, sgg: str = "11110"):
     return nh.HuntResult("search", candidates=[cand], auto=nh.AutoExtract(sources=[src], merged=merged))
 
 
-def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, monkeypatch):
+def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, wheels, monkeypatch):
     """구를 고르면 공고를 찾아 바로 추출: 위에 인터넷 주소, 읍·면·동 전체 적용, 작업 화면 사이드바 공고에 초안."""
     from core import notice_hunter as nh
 
@@ -247,7 +308,7 @@ def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, monkeypatch):
     monkeypatch.setattr(nh, "hunt", lambda *a, **k: seen.append(a[0]) or res)
     at = open_home()
     at.text_input(key="home-q").input("종로구").run()
-    at.selectbox(key="home-hit").set_value(0).run()
+    wheels.hit(at, "종로구")
     assert not at.exception and seen == []  # 지역만 골라서는 검색하지 않음
     at.button(key="home-search").click().run()
     assert not at.exception
@@ -264,7 +325,7 @@ def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, monkeypatch):
     assert at.button(key="home-start").disabled is False
     at.button(key="home-start").click().run()
     assert not at.exception
-    assert at.selectbox(key="notice-11110-False").value == "auto-notice"
+    assert at.session_state["notice-11110-False"] == "auto-notice"
     assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음
     assert any("조건을 추출해 합쳤습니다" in x.value for x in list(at.success) + list(at.warning))  # 검색 결과 요약은 남는다
 

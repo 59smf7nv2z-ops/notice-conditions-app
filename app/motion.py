@@ -48,11 +48,11 @@ CSS = """
 .stepbar.back [aria-current="step"] span { animation: step-fill-back var(--m-view) var(--m-ease) backwards; }
 
 /* ── 사이드바: 펼치면 내용이 패널을 따라 들어온다 ────────────────────── */
-section[data-testid="stSidebar"] { transition-timing-function: var(--m-ease) !important; }
-section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+[data-testid="stSidebar"] { transition-timing-function: var(--m-ease) !important; }
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
   transition: opacity var(--m-panel) var(--m-ease) 60ms, transform var(--m-panel) var(--m-ease) 60ms;
 }
-section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"] {
+[data-testid="stSidebar"][data-collapsed="true"] [data-testid="stSidebarUserContent"] {
   opacity: 0; transform: translateX(-16px); transition-duration: 120ms; transition-delay: 0ms; transition-timing-function: var(--m-exit);
 }
 
@@ -78,8 +78,8 @@ details > summary [data-testid="stExpanderIcon"] { transition: transform var(--m
 @media (prefers-reduced-motion: reduce) {
   [class*="st-key-view-"] { animation: view-fade 200ms ease-out backwards !important; }
   .stepbar [aria-current="step"] span { animation: view-fade 200ms ease-out backwards !important; }
-  section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"] { transform: none; }
-  section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { transition-property: opacity; }
+  [data-testid="stSidebar"][data-collapsed="true"] [data-testid="stSidebarUserContent"] { transform: none; }
+  [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { transition-property: opacity; }
   div[data-baseweb="popover"] > div, details[open] > [data-testid="stExpanderDetails"] { animation: view-fade 120ms ease-out backwards; }
   [data-testid="stStatusWidget"] :has(> [data-testid="stStatusWidgetRunningManIcon"])::before { animation-duration: 2.4s; }
 }

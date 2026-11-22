@@ -14,9 +14,10 @@ from core.conditions import BUSINESS_TYPE_LABEL, Contact, NoticeConditions
 from core.llm import extractor, factory
 from core.llm.base import LLMError, usage_summary
 from core.llm.preprocess import ACCEPTED, UploadedFile, to_parts
-from app import sidebar
+from app import sidebar, wheel_picker
 from core.notices import save_notice
 
+BOUND = {"LE": "이하", "LT": "미만"}
 TRI = {"불명": None, "예": True, "아니오": False}
 FIELD_LABELS = {
     "local_gov": "지자체", "program_name": "사업명", "application_period": "접수기간", "notice_date": "공고일",
@@ -132,15 +133,15 @@ def editor(draft: dict) -> None:
         min_years = y1.number_input("경과연수(년 이상, 0=없음)", 0, 100, n.min_years or 0)
         f1, f2 = st.columns(2)
         max_floors = f1.number_input("층수(0=없음)", 0, 100, n.max_floors or 0)
-        fb = f2.selectbox("층수 경계", ["LE", "LT"], ["LE", "LT"].index(n.floors_bound), format_func={"LE": "이하", "LT": "미만"}.get)
+        fb = wheel_picker.wheel_select(f2, "층수 경계", ["LE", "LT"], index=["LE", "LT"].index(n.floors_bound), format_func=BOUND.get, key=f"draft-fb-{n.notice_id}")
         a1, a2 = st.columns(2)
         max_area = a1.number_input("연면적 ㎡(0=없음)", 0.0, 100000.0, float(n.max_area or 0))
-        ab = a2.selectbox("연면적 경계", ["LE", "LT"], ["LE", "LT"].index(n.area_bound), format_func={"LE": "이하", "LT": "미만"}.get)
+        ab = wheel_picker.wheel_select(a2, "연면적 경계", ["LE", "LT"], index=["LE", "LT"].index(n.area_bound), format_func=BOUND.get, key=f"draft-ab-{n.notice_id}")
         uses = st.text_input("용도(쉼표 구분, 표준 토큰)", ", ".join(n.use_filter))
         structs = st.text_input("구조(쉼표 구분)", ", ".join(n.structure_filter))
         c1, c2 = st.columns(2)
-        coll = c1.selectbox("집합건물 제외", list(TRI), [v for v in TRI.values()].index(n.collective_excluded))
-        multi = c2.selectbox("공동주택 제외", list(TRI), [v for v in TRI.values()].index(n.multi_housing_excluded))
+        coll = wheel_picker.wheel_select(c1, "집합건물 제외", list(TRI), index=list(TRI.values()).index(n.collective_excluded), key=f"draft-coll-{n.notice_id}")
+        multi = wheel_picker.wheel_select(c2, "공동주택 제외", list(TRI), index=list(TRI.values()).index(n.multi_housing_excluded), key=f"draft-multi-{n.notice_id}")
         excl = st.text_area("제외대상(줄마다)", "\n".join(n.exclusions))
         offmap = st.text_area("대장 외 조건 → 현장확인(줄마다)", "\n".join(n.offmap_conditions))
         r1, r2 = st.columns(2)
@@ -154,7 +155,7 @@ def editor(draft: dict) -> None:
         st.markdown("**원문 근거**")
         keys = [k for k in FIELD_LABELS if k in n.evidence]
         if keys:
-            k = st.selectbox("항목", keys, format_func=FIELD_LABELS.get, key="ev-key")
+            k = wheel_picker.wheel_select(st, "항목", keys, format_func=FIELD_LABELS.get, key="ev-key", rows=5)
             st.info(n.evidence[k])
         else:
             st.caption("원문 인용이 없습니다.")
