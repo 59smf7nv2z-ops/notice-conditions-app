@@ -7,6 +7,7 @@ import streamlit as st
 
 from app.state import Ctx
 from core import building_api
+from core.ordinances import SCALE_RULE_LABEL
 from core.evaluator import REASON_TEXT, STATUS_LABEL
 from core.export import ExportSummary, export_filename, result_table, to_csv_bytes, to_excel_bytes
 from core.pipeline import RegionResult, run_region
@@ -17,7 +18,7 @@ STATUS_ORDER = ["CANDIDATE", "NEEDS_CHECK", "ORDINANCE_ONLY", "NOT_ELIGIBLE"]
 def banners(ctx: Ctx) -> None:
     n, o = ctx.notice, ctx.ordinance
     if n is None:
-        st.info("공고 없음 – 조례 기준 판정" if o else "공고 없음 · 조례 없음 – 법정 기준(사용승인 후 30년)만 적용")
+        st.info("공고가 없어 조례 기준으로 판정합니다." if o else "공고와 조례가 없어 법정 기준(사용승인 후 30년 이상)으로만 판정합니다.")
     else:
         badges = []
         if not n.reviewed:
@@ -36,8 +37,9 @@ def banners(ctx: Ctx) -> None:
         elif state == "UNKNOWN":
             st.warning(f"⚠️ 접수기간 확인 불가 · {msg}")
     if o:
-        extra = " · 검토필요 분류" if o.review_needed else ""
-        st.caption(f"조례: {o.ordinance_name} ({o.effective_date}) · 규모 유형 {o.scale_rule_type}{extra}" + (f" · {o.note}" if o.note else ""))
+        extra = " · 조례 분류 검토 필요" if o.review_needed else ""
+        st.caption(f"조례: {o.ordinance_name} ({o.effective_date}) · 규모 기준 {SCALE_RULE_LABEL.get(o.scale_rule_type, o.scale_rule_type)}{extra}"
+                   + (f" · {o.note}" if o.note else ""))
 
 
 def _run(ctx: Ctx, dongs: list[str], fetch: bool) -> RegionResult:
@@ -79,7 +81,7 @@ def detail_panel(row: pd.Series, compact: bool = False, key_prefix: str = "") ->
             "경과연수": "확인 필요" if pd.isna(row.get("age_years")) else f"{int(row.get('age_years'))}년",
             "지상/지하층수": f"{row.get('grndFlrCnt')} / {row.get('ugrndFlrCnt')}",
             "연면적(㎡)": row.get("totArea"),
-            "주구조": f"{row.get('strctCdNm') or row.get('etcStrct')} → {row.get('structure_std') or '미매핑'}",
+            "주구조": f"{row.get('strctCdNm') or row.get('etcStrct')} → {row.get('structure_std') or '분류 못 함'}",
             "주용도": f"{row.get('mainPurpsCdNm')} / {row.get('etcPurps') or '-'}",
             "대장 구분": f"{row.get('regstrGbCdNm')} · {row.get('mainAtchGbCdNm')}",
             "대장PK": row.get("mgmBldrgstPk"),
@@ -136,7 +138,7 @@ def current_view(ctx: Ctx) -> tuple[RegionResult | None, list[str]]:
 def render(ctx: Ctx) -> RegionResult | None:
     banners(ctx)
     if not ctx.bjdong_cds:
-        st.info("사이드바에서 법정동을 하나 이상 고르세요.")
+        st.info("왼쪽 사이드바에서 읍·면·동을 하나 이상 고르세요.")
         return None
 
     try:
@@ -152,13 +154,13 @@ def render(ctx: Ctx) -> RegionResult | None:
         key = (ctx.sigungu_cd, tuple(new))
         est = st.session_state["estimate"].get(key)
         if est is None:
-            if st.button(f"예상 호출 수 확인 ({len(new)}개 동 건수 조회)"):
-                with st.spinner("동별 건수 확인 중"):
+            if st.button(f"조회 전 건물 수 확인 (읍·면·동 {len(new)}곳)"):
+                with st.spinner("읍·면·동별 건물 수 확인 중"):
                     st.session_state["estimate"][key] = building_api.estimate_calls(ctx.sigungu_cd, new)
                 st.rerun()
             ready = False
         else:
-            st.warning(f"전체 {len(new)}개 동 · 건물 약 {est['buildings']:,}건 · 예상 API 호출 {est['calls']:,}회")
+            st.warning(f"읍·면·동 {len(new)}곳 · 건물 약 {est['buildings']:,}건 · 건축물대장 조회 약 {est['calls']:,}회(하루 허용량에서 차감)")
             ready = st.checkbox("확인했습니다. 조회를 진행합니다.")
 
     if st.button("조회·판정", type="primary", disabled=not ready):
@@ -172,7 +174,7 @@ def render(ctx: Ctx) -> RegionResult | None:
         for b in queried:
             st.session_state["failed"][ctx.sigungu_cd].pop(b, None)
         if res.quota_stopped:
-            st.error("일일 허용 호출량을 초과해 조회를 멈췄습니다. 받은 동까지만 판정했습니다.")
+            st.error("건축물대장 하루 조회 허용량을 넘어 조회를 멈췄습니다. 받은 동까지만 판정했으니, 나머지 동은 다음 날 다시 조회하세요.")
         elif res.failed_dongs:
             st.error(
                 "조회하지 못한 동: "
@@ -182,8 +184,8 @@ def render(ctx: Ctx) -> RegionResult | None:
             with st.expander("실패 사유"):
                 for b, why in res.failed_dongs.items():
                     st.caption(f"{ctx.bjdong_names.get(b, b)}: {why}")
-                st.caption("공공데이터포털 건축물대장 API가 일시적으로 응답하지 않을 때가 있습니다(503 SERVICETIMEOUT 등).")
-        st.toast(f"API 호출 {res.api_calls}회")
+                st.caption("공공데이터포털 건축물대장 서비스가 잠시 응답하지 않을 때가 있습니다. 잠시 뒤 '조회·판정'을 다시 눌러 보세요.")
+        st.toast(f"건축물대장 조회 {res.api_calls}회")
 
     if not queried:
         st.caption("‘조회·판정’을 누르면 대장 조회와 판정을 한 번에 합니다.")
@@ -218,9 +220,9 @@ def render(ctx: Ctx) -> RegionResult | None:
     if rows:
         detail_panel(df.iloc[rows[0]])
 
-    with st.expander("미매핑 구조·용도 값, 실패한 동, 경고"):
-        st.write("구조 미매핑", dict(res.unmapped_structures) or "없음")
-        st.write("용도 미매핑", dict(res.unmapped_uses) or "없음")
+    with st.expander("분류하지 못한 구조·용도, 조회 실패한 동, 경고"):
+        st.write("분류하지 못한 구조(대장 값: 건수)", dict(res.unmapped_structures) or "없음")
+        st.write("분류하지 못한 용도(대장 값: 건수)", dict(res.unmapped_uses) or "없음")
         failed = st.session_state["failed"].get(ctx.sigungu_cd, {})
         st.write("실패한 동", {ctx.bjdong_names.get(k, k): v for k, v in failed.items()} or "없음")
         for w in res.warnings:
@@ -239,7 +241,7 @@ def render(ctx: Ctx) -> RegionResult | None:
         failed_dongs=st.session_state["failed"].get(ctx.sigungu_cd, {}),
     )
     c1, c2, c3 = st.columns([1, 1, 2])
-    include_ne = c3.checkbox("Excel에 비해당 시트 포함", value=True)
+    include_ne = c3.checkbox("엑셀에 '비해당' 시트도 넣기", value=True)
     df_all = res.df
     # 파일은 버튼을 누를 때만 만든다(매번 다시 그릴 때 Excel을 만들지 않도록). 디스크에는 쓰지 않는다.
     c1.download_button(

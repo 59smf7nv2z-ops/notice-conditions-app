@@ -22,6 +22,7 @@ from app.tab_region import detail_panel
 from core import boundaries, geocode, regions
 from core.evaluator import STATUS_LABEL
 from core.export import result_table
+from core.ordinances import SCALE_RULE_LABEL
 from core.pipeline import RegionResult, run_region
 
 COLORS = {"CANDIDATE": "#2e7d32", "NEEDS_CHECK": "#ef6c00", "ORDINANCE_ONLY": "#1565c0"}
@@ -43,6 +44,7 @@ def _init() -> None:
     for k in ("geo", "bounds"):
         st.session_state.setdefault(k, {})
     st.session_state.setdefault("map_pick", None)  # 선택한 필지 키
+    st.session_state.setdefault("map_focus", None)  # 지도를 옮겨 보여 줄 필지(표에서 고른 것만. 핀은 이미 보이므로 옮기지 않는다)
     st.session_state.setdefault("letter_pins", set())  # 지도에서 안내문 대상에 추가한 대장PK
 
 
@@ -61,7 +63,7 @@ def _banner(ctx: Ctx) -> None:
     else:
         parts.append("공고 없음 – 조례 기준 판정" if o else "공고·조례 없음 – 법정 기준(30년)")
     if o:
-        parts.append(f"조례 규모 유형: {o.scale_rule_type}")
+        parts.append(f"조례 규모 기준: {SCALE_RULE_LABEL.get(o.scale_rule_type, o.scale_rule_type)}")
     if ctx.test_mode:
         parts.append(":red-badge[시험용]")
     st.markdown("  \n".join(parts))
@@ -115,7 +117,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     if res is not None and not res.df.empty and show:
         pending = geocode.pending_parcels(res.df, st.session_state["geo"], tuple(show))
         if pending:
-            if t4.button(f"지도 좌표 가져오기 (필지 {len(pending)}개, 호출 최대 {2 * len(pending)}회)", type="primary"):
+            if t4.button(f"지도 좌표 가져오기 (필지 {len(pending)}곳, 좌표 조회 최대 {2 * len(pending)}회)", type="primary"):
                 bar = st.progress(0.0, "좌표 조회 중")
                 try:
                     g = geocode.geocode_buildings(
@@ -181,10 +183,10 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
                     tooltip=f"{first['platPlc']} · {label} · PK:{pks}",
                 ).add_to(cluster)
 
-        pick = st.session_state["map_pick"]
+        focus = st.session_state["map_focus"]
         center, zoom = home, home_zoom
-        if pick is not None and not mapped.empty and (mapped["parcel_key"] == pick).any():
-            r0 = mapped[mapped["parcel_key"] == pick].iloc[0]
+        if focus is not None and not mapped.empty and (mapped["parcel_key"] == focus).any():
+            r0 = mapped[mapped["parcel_key"] == focus].iloc[0]
             center, zoom = (r0["lat"], r0["lng"]), 18
         legend = "".join(
             f'<span style="color:{COLORS[s]}">{SHAPES[s][2]}</span> {STATUS_LABEL[s]}&nbsp;&nbsp;' for s in PRIORITY
@@ -205,9 +207,10 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     if tip_changed and "PK:" in tip and not mapped.empty:
         pks = tip.split("PK:")[-1].strip().split(",")
         hit = mapped[mapped["mgmBldrgstPk"].astype(str).isin(pks)]
-        if not hit.empty and hit.iloc[0]["parcel_key"] != st.session_state["map_pick"]:
+        if not hit.empty:
+            # 다시 그리지 않는다: 오른쪽 상세 칸은 아래에서 이 값을 읽어 이번 실행에 바로 그린다.
+            # (핀이 많으면 지도를 한 번 그리는 데 1초가 넘게 걸린다. 핀 2,000개 기준 약 1.5~2초)
             st.session_state["map_pick"] = hit.iloc[0]["parcel_key"]
-            st.rerun()
     drawn = (out or {}).get("last_active_drawing") or {}
     clicked_emd = (drawn.get("properties") or {}).get("emd_cd")
 
@@ -236,14 +239,14 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
                 pins.add(pk)
                 st.rerun()
             if pins:
-                st.caption(f"지도에서 고른 안내문 대상 {len(pins)}건 (탭3에서 사용)")
+                st.caption(f"지도에서 고른 안내문 대상 {len(pins)}건 (안내문 화면에서 씀)")
         elif not clicked_emd:
-            st.caption("핀을 누르면 건물 상세가, 법정동을 누르면 동 정보가 여기에 나옵니다.")
+            st.caption("핀을 누르면 건물 상세가, 읍·면·동 경계를 누르면 그 동 정보가 여기에 나옵니다.")
 
     # --- 표 · 좌표 없음 ----------------------------------------------------------
     if parcels.empty:
         if res is None or res.df.empty:
-            st.info("탭2에서 조회·판정을 하거나, 지도에서 법정동을 눌러 조회하세요.")
+            st.info("'지역 일괄 대조' 화면에서 '조회·판정'을 누르거나, 지도에서 읍·면·동 경계를 눌러 조회하세요.")
         return
     st.markdown("**지도 대상 건물** (행을 고르면 상세 패널이 열리고 지도가 그 건물로 이동)")
     view = parcels.reset_index(drop=True)
@@ -257,8 +260,8 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     if sel_key != st.session_state.get("map_table_sel"):
         st.session_state["map_table_sel"] = sel_key
         if sel_key is not None and sel_key != st.session_state["map_pick"]:
-            st.session_state["map_pick"] = sel_key
-            st.rerun()
+            st.session_state["map_pick"] = st.session_state["map_focus"] = sel_key
+            st.rerun()  # 지도는 위에 이미 그려졌으므로, 그 건물로 옮기려면 한 번 더 그린다
     missing = view[view["geo_status"] == "좌표 없음"]
     if not missing.empty:
         with st.expander(f"좌표 없음 {len(missing)}건 (표에는 있고 지도에는 없음)"):
@@ -276,7 +279,7 @@ def _dong_panel(ctx: Ctx, emd_cd: str, queried: set) -> None:
     if not todo:
         st.caption("조회·판정 완료")
         return
-    if st.button(f"이 동 조회·판정 ({len(todo)}개 법정동)", key=f"map-run-{emd_cd}"):
+    if st.button(f"이 동 조회·판정 (읍·면·동 {len(todo)}곳)", key=f"map-run-{emd_cd}"):
         bar = st.progress(0.0, "대장 조회")
         r = run_region(
             sgg, todo, ctx.notice, ctx.ordinance, ctx.eval_date, st.session_state["raw"],

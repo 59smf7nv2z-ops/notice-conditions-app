@@ -12,7 +12,7 @@ import pandas as pd
 
 from core.conditions import NoticeConditions
 from core.evaluator import REASON_TEXT, STATUS_LABEL
-from core.ordinances import OrdinanceConditions
+from core.ordinances import SCALE_RULE_LABEL, OrdinanceConditions
 
 # 결과 컬럼(화면·파일 공통). (표시 이름, 만드는 함수)
 def _join(v: object, sep: str = "; ") -> str:
@@ -117,7 +117,7 @@ def _condition_rows(n: NoticeConditions | None, o: OrdinanceConditions | None) -
     add("제외대상", _join(n.exclusions if n else []), _join(o.exclusions if o else []), "exclusions")
     add("대장 외 조건", _join(n.offmap_conditions if n else []), "위원회 자문·심의" if o and o.committee_required else "", None)
     if o:
-        add("조례 규모 유형", "", o.scale_rule_type + (f" ({o.note})" if o.note else ""), None)
+        add("조례 규모 기준", "", SCALE_RULE_LABEL.get(o.scale_rule_type, o.scale_rule_type) + (f" ({o.note})" if o.note else ""), None)
         rows.append({"조건": "조례 조문", "공고 기준": "", "조례 기준": o.evidence_definition or "", "공고 원문 근거": ""})
     return rows
 
@@ -130,12 +130,12 @@ def _summary_rows(s: ExportSummary, df: pd.DataFrame) -> list[tuple[str, object]
         ("판정 기준일", s.eval_date.isoformat()),
         ("공고", (n.program_name or n.notice_id) if n else "공고 없음 – 조례 기준 판정" if o else "공고·조례 없음 – 법정 기준(30년)만 적용"),
         ("공고 검수 여부", ("검수 완료" if n.reviewed else "미검수") if n else ""),
-        ("공고 수정 여부", "담당자 수정본(세션)" if s.notice_edited else ""),
+        ("공고 수정 여부", "담당자가 이 창에서 고친 조건" if s.notice_edited else ""),
         ("접수기간", f"{n.apply_start or '?'} ~ {n.apply_end or '?'}" if n else ""),
         ("시험용 적용", "다른 지역 공고를 시험용으로 적용한 결과" if s.test_mode else ""),
         ("조례", o.ordinance_name if o else "없음"),
         ("조례 시행일", o.effective_date.isoformat() if o and o.effective_date else ""),
-        ("조례 규모 유형", o.scale_rule_type if o else ""),
+        ("조례 규모 기준", SCALE_RULE_LABEL.get(o.scale_rule_type, o.scale_rule_type) if o else ""),
         ("총 건물 수", len(df)),
     ]
     for code, label in STATUS_LABEL.items():

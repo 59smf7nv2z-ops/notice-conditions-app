@@ -34,6 +34,15 @@ ScaleRuleType = Literal[
     "NUMERIC", "DISCRETION", "NONE", "STRUCTURE_RULE_REF", "CONSTRUCTION_ACT_REF", "USE_STRUCTURE"
 ]
 EXTERNAL_REF_TYPES = ("STRUCTURE_RULE_REF", "CONSTRUCTION_ACT_REF")
+# 화면·내보내기용 이름(코드값을 그대로 보이지 않는다)
+SCALE_RULE_LABEL = {
+    "NUMERIC": "층수·연면적 수치",
+    "DISCRETION": "규모 수치 없음(단체장 재량)",
+    "NONE": "점검대상 조문 없음",
+    "STRUCTURE_RULE_REF": "구조기준규칙의 소규모건축물 기준 참조",
+    "CONSTRUCTION_ACT_REF": "건설산업기본법 제41조 기준 참조",
+    "USE_STRUCTURE": "용도·구조 기준",
+}
 LEGAL_MIN_YEARS = 30  # 건축물관리법 제15조제1항제1호: 사용승인 후 30년 이상
 
 

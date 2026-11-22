@@ -18,7 +18,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
         "구청 내부 시스템에서 결합합니다."
     )
     if res is None or res.df.empty:
-        st.info("탭2에서 먼저 조회·판정을 하세요.")
+        st.info("'지역 일괄 대조' 화면에서 먼저 '조회·판정'을 누르세요.")
         return
     try:
         letters.ensure_can_generate(ctx.notice, ctx.eval_date)
@@ -73,7 +73,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     template, warns, from_llm = cache[key]
     for w in warns:
         st.warning(w)
-    st.caption("틀: " + ("LLM이 만든 틀(검증 통과)" if from_llm else "내장 틀"))
+    st.caption("안내문 틀: " + ("AI가 만든 틀(빠진 항목 검사 통과)" if from_llm else "기본 틀"))
     with st.expander("틀 보기(자리표시자 포함)"):
         st.code(template, language=None)
 

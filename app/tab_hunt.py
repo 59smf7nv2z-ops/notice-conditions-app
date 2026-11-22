@@ -91,22 +91,17 @@ def summary(res: nh.HuntResult | None, eval_date: date, label: str) -> None:
         st.success(f"공고: {label}의 {res.message} 사이드바 '공고'에서 고르세요.")
         return
     if a and a.merged is not None:
-        n = a.merged.notice
         links = " · ".join(f"[{s.title[:40]}]({s.url})" for s in a.merged.sources)
-        state, msg = n.period_status(eval_date)
-        body = (f"공고 글 {len(a.merged.sources)}건에서 조건을 추출해 합쳤습니다: {links}  \n"
-                f"{'접수 중 · ' if state == 'OPEN' else '⚠️ '}{msg}  \n"
-                "아래 ② 조건 검수에서 원문과 대조해 저장해야 후보 건물을 찾을 수 있습니다.")
-        (st.success if state == "OPEN" else st.warning)(body)
+        st.success(f"공고 글 {len(a.merged.sources)}건에서 조건을 뽑아 합쳤습니다: {links}")
         return
     if a and a.region_mismatch:
-        st.warning("찾은 글이 모두 다른 지역 공고라 적용하지 않았습니다. 후보 목록에서 다른 글을 고르세요.")
+        st.warning("찾은 글이 모두 다른 지역 공고라 적용하지 않았습니다. 아래 '공고 검색 결과'에서 다른 글을 고르세요.")
         return
     if a and a.error:
-        st.error(f"공고 자동 추출 실패: {a.error}")
+        st.error(f"공고에서 조건을 뽑지 못했습니다({a.error}). 아래 '공고 검색 결과'에서 다른 글을 고르거나 공고문을 직접 올리세요.")
         return
     if a and a.sources:
-        st.info("올해 글을 열어 봤지만 조건을 뽑을 수 있는 공고가 아니었습니다(" + "; ".join(r.reason for r in a.sources[:3]) + "). 후보 목록에서 다른 글을 고르세요.")
+        st.info("올해 글을 열어 봤지만 조건을 뽑을 수 있는 공고가 아니었습니다(" + "; ".join(r.reason for r in a.sources[:3]) + "). 아래 '공고 검색 결과'에서 다른 글을 고르세요.")
         return
     st.info(f"공고 검색: {res.message}")
 
@@ -175,7 +170,7 @@ def panel(sgg: str, label: str, eval_date: date, has_ordinance: bool, prefix: st
     stt = factory.status("extract")
     new = [c for c in picked if c.url not in _cache()]
     cost = "샘플 결과(외부 전송 없음)" if stt.is_mock else (f"{stt.label}로 본문 {len(new)}건 전송" if new else "이미 추출한 글")
-    if st.button(f"선택한 글 {len(picked)}건 추출·합성 → 필터 적용 · {cost}", type="primary", key=f"{prefix}-extract"):
+    if st.button(f"고른 글 {len(picked)}건에서 조건 뽑아 합치기 · {cost}", type="primary", key=f"{prefix}-extract"):
         provider = factory.get_provider("extract")
         with st.spinner("본문 가져와 추출하는 중"):
             try:

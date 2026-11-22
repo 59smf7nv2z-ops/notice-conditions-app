@@ -236,7 +236,7 @@ def test_letters_and_map_sections_use_session_result(fakes):
 
 def test_work_sections_have_no_notice_tab(fakes):
     at = open_work()
-    assert at.segmented_control[0].options == ["① 지역 일괄 대조", "② 지도", "③ 안내문 및 결과 리포트"]
+    assert at.segmented_control[0].options == ["지역 일괄 대조", "지도", "안내문·결과 리포트"]
     assert at.segmented_control[0].value == "region"
 
 
@@ -275,7 +275,7 @@ def test_home_review_editor_shows_period_warning_and_sources(fakes):
     at.session_state["region"] = {"sgg": "30140", "all": True, "dongs": [], "v": 4}
     at.run()
     assert not at.exception
-    assert any("조건 검수·수정" in e.label for e in at.expander)
+    assert any("② 조건 검수" in m.value for m in at.markdown)
     warnings = " ".join(w.value for w in at.warning)
     if date.today() > date(2026, 9, 30):
         assert "사업기간 아님" in warnings
@@ -318,7 +318,7 @@ def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, wheels, monkeypa
     assert at.checkbox(key="home-all-11110").value is True  # 공고 지역 → 동 전체
     assert any("추출한 공고 조건" in m.value for m in at.markdown)
     assert at.button(key="home-start").disabled is True  # ② 검수 전에는 ③ 후보 건물 찾기 잠김
-    assert any("검수 필요" in e.label for e in at.expander)
+    assert any("② 조건 검수" in m.value for m in at.markdown)
     next(b for b in at.button if b.label == "검수 완료로 저장").click().run()
     assert not at.exception
     assert (notice_dir / "auto-notice.json").exists()
@@ -327,7 +327,8 @@ def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, wheels, monkeypa
     assert not at.exception
     assert at.session_state["notice-11110-False"] == "auto-notice"
     assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음
-    assert any("조건을 추출해 합쳤습니다" in x.value for x in list(at.success) + list(at.warning))  # 검색 결과 요약은 남는다
+    assert any("**공고**" in m.value and url in m.value for m in at.markdown)  # 작업 화면에는 적용 공고 한 줄(원문 주소)만
+    assert not any("합쳤습니다" in x.value for x in at.success)  # 처음 화면의 검색 요약은 되풀이하지 않는다
 
 
 def test_uploaded_draft_is_not_overwritten_by_auto_search(fakes, monkeypatch):

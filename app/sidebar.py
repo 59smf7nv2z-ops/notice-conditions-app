@@ -35,14 +35,14 @@ def _editor(n: NoticeConditions) -> None:
             c3, c4 = st.columns(2)
             max_area = c3.number_input("연면적(㎡)", 0.0, 100000.0, float(cur.max_area or 0), help="0 = 조건 없음")
             ab = _bound_select(c4, "연면적 경계", cur.area_bound, f"ab-{n.notice_id}")
-            use = st.text_input("용도(쉼표 구분)", ", ".join(cur.use_filter))
-            strc = st.text_input("구조(쉼표 구분)", ", ".join(cur.structure_filter))
+            use = st.text_input("용도(쉼표로 구분)", ", ".join(cur.use_filter))
+            strc = st.text_input("구조(쉼표로 구분)", ", ".join(cur.structure_filter))
             coll = st.checkbox("집합건물 제외", bool(cur.collective_excluded))
-            offmap = st.text_area("대장 외 조건(줄마다 하나)", "\n".join(cur.offmap_conditions))
+            offmap = st.text_area("대장 외 조건(한 줄에 하나)", "\n".join(cur.offmap_conditions))
             d1, d2 = st.columns(2)
             start = d1.date_input("접수 시작", cur.apply_start, format="YYYY-MM-DD")
             end = d2.date_input("접수 종료", cur.apply_end, format="YYYY-MM-DD")
-            if st.form_submit_button("세션에 반영"):
+            if st.form_submit_button("고친 조건 적용"):
                 split = lambda s: [x.strip() for x in s.split(",") if x.strip()]  # noqa: E731
                 try:
                     edits[n.notice_id] = cur.model_copy(
@@ -64,15 +64,15 @@ def _editor(n: NoticeConditions) -> None:
                     st.rerun()
                 except ValueError as e:
                     edits.pop(n.notice_id, None)
-                    st.error(f"수정값 오류: {e}")
+                    st.error(f"고친 값을 적용하지 못했습니다: {e} 값을 고친 뒤 다시 누르세요.")
         if n.notice_id in edits:
             st.download_button(
-                "수정본 JSON 내려받기",
+                "고친 조건 내려받기(JSON)",
                 edits[n.notice_id].model_dump_json(indent=2).encode("utf-8"),
                 file_name=f"{n.notice_id}_수정본.json",
                 mime="application/json",
             )
-            if st.button("수정 취소"):
+            if st.button("고친 조건 되돌리기"):
                 edits.pop(n.notice_id)
                 st.rerun()
 
@@ -156,7 +156,7 @@ def render() -> Ctx | None:
         excl_coll = st.checkbox("집합건물 제외(공고·조례 공통)", False)
 
     sb.divider()
-    if sb.button("세션 데이터 지우기", help="조회한 대장·판정 결과·수정본을 모두 지웁니다."):
+    if sb.button("조회 결과 모두 지우기", help="이 창에서 조회한 건축물대장·판정 결과·고친 조건을 모두 지웁니다."):
         clear()
         st.rerun()
 

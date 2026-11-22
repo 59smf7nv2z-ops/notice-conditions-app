@@ -60,7 +60,8 @@ CSS = f"""
   font-size: var(--fs, 1rem); opacity: .7; transition: opacity 150ms ease;
 }}
 .wp-item[aria-selected="true"] {{ opacity: 1; font-weight: 600; }}
-.wp-item.ph {{ opacity: .45; }}
+/* 아직 안 고름: 고른 값(진하고 굵게)보다 옅지만 읽을 수 있게(대비 4.5:1 이상) */
+.wp-item.ph, .wp-item.ph[aria-selected="true"] {{ opacity: .72; font-weight: 400; }}
 .wp.off .wp-frame, .wp.off .wp-native {{ opacity: .45; pointer-events: none; }}
 
 /* 휴대폰: 표준 select(운영체제 기본 선택 창) */
@@ -147,10 +148,13 @@ export default function (component) {{
   const want = Math.max(0, data.items.findIndex(it => it.v === data.value));
   if (data.items[want]) sel.value = String(data.items[want].v);
 
-  const mark = (i) => {{
-    list.querySelectorAll('.wp-item').forEach((li, k) => li.setAttribute('aria-selected', k === i ? 'true' : 'false'));
-    const li = list.children[i];
-    if (li) list.setAttribute('aria-activedescendant', li.id);
+  if (rebuilt) root._marked = -1;
+  const mark = (i) => {{   // 스크롤 중 매 프레임 불리므로 칸이 바뀔 때만 손댄다
+    if (root._marked === i) return;
+    const prev = list.children[root._marked], li = list.children[i];
+    if (prev) prev.setAttribute('aria-selected', 'false');
+    if (li) {{ li.setAttribute('aria-selected', 'true'); list.setAttribute('aria-activedescendant', li.id); }}
+    root._marked = i;
   }};
   const go = (i, smooth) => {{
     i = Math.max(0, Math.min(root._items.length - 1, i));
@@ -174,6 +178,12 @@ export default function (component) {{
     if (i !== root._committed && root._items[i]) {{ root._committed = i; root._set('pick', root._items[i].v); }}
   }};
   const commit = () => {{ const i = Math.round(list.scrollTop / H); mark(i); send(i); }};
+  // 멈추자마자 보내지 않는다: 잠깐 더 기다려 지나가는 칸마다 앱을 다시 그리지 않게 한다.
+  // 마우스·터치는 0.25초, 키보드는 0.5초(화살표를 이어 누르는 사이). Enter나 초점이 빠지면 바로 보낸다.
+  let wait = null, viaKey = false, dragging = false;
+  const settle = () => {{ clearTimeout(wait); wait = setTimeout(() => {{ wait = null; if (!dragging) commit(); }}, viaKey ? 500 : 250); }};
+  const flush = () => {{ if (wait !== null) {{ clearTimeout(wait); wait = null; commit(); }} }};
+  list.addEventListener('focusout', flush);
 
   sel.addEventListener('change', () => {{
     const i = root._items.findIndex(it => String(it.v) === sel.value);
@@ -181,17 +191,46 @@ export default function (component) {{
   }});
 
   // 스크롤이 멈추면 고른다(scrollend가 없으면 잠깐 멈춤으로 판단)
-  let t, dragging = false;
+  let t;
   list.addEventListener('scroll', () => {{
     mark(Math.round(list.scrollTop / H));
-    if (!('onscrollend' in window)) {{ clearTimeout(t); t = setTimeout(() => {{ if (!dragging) commit(); }}, 120); }}
+    clearTimeout(wait);   // 아직 움직이는 중
+    if (!('onscrollend' in window)) {{ clearTimeout(t); t = setTimeout(() => {{ if (!dragging) settle(); }}, 120); }}
   }}, {{ passive: true }});
-  list.addEventListener('scrollend', () => {{ if (!dragging) commit(); }});
+  list.addEventListener('scrollend', () => {{ if (!dragging) settle(); }});
+
+  // 페이지 스크롤을 가로채지 않는다: 휠은 초점을 받았거나, 마우스를 잠시 올려 둔 뒤에만 돌린다.
+  // 페이지를 굴리던 중 마우스가 휠 위로 지나가면 그 입력은 페이지로 넘긴다. 첫·끝 항목에서 더 굴려도 페이지로.
+  let hoverAt = Infinity, pageAt = 0;
+  list.addEventListener('pointerenter', (e) => {{ if (e.pointerType === 'mouse') hoverAt = performance.now(); }});
+  list.addEventListener('pointerleave', () => {{ hoverAt = Infinity; }});
+  document.addEventListener('scroll', (e) => {{ if (e.target !== list) pageAt = performance.now(); }}, {{ capture: true, passive: true }});
+  const scroller = () => {{
+    for (let n = root.getRootNode().host || root; n; n = n.parentElement || (n.getRootNode && n.getRootNode().host)) {{
+      if (n === document.body || n === document.documentElement) break;
+      const oy = getComputedStyle(n).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+    }}
+    return document.scrollingElement;
+  }};
+  const owns = (e) => {{
+    const now = performance.now();
+    if (root.getRootNode().activeElement === list) return true;        // 키보드 초점을 받은 휠
+    return now - hoverAt > 400 && now - pageAt > 400;                   // 잠시 머문 마우스 + 페이지가 막 구르던 중이 아님
+  }};
+  const toPage = (e) => {{
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1;
+    scroller().scrollBy({{ top: e.deltaY * k, left: e.deltaX * k }});
+  }};
 
   // 마우스 휠: 눈금 하나 = 한 칸. 트랙패드(작은 값이 잇달아 옴)는 한 칸 높이만큼 쌓일 때마다 한 칸
   let acc = 0, target = null, idle;
   list.addEventListener('wheel', (e) => {{
-    e.preventDefault();
+    viaKey = false;
+    e.preventDefault();   // 휠 목록이 직접 구르면 스냅이 어긋나므로 항상 막고, 페이지 몫이면 페이지를 대신 굴린다
+    const at = target ?? Math.round(list.scrollTop / H);
+    const edge = (e.deltaY < 0 && at <= 0) || (e.deltaY > 0 && at >= root._items.length - 1);
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || !owns(e) || (edge && target === null)) {{ toPage(e); return; }}
     clearTimeout(idle); idle = setTimeout(() => {{ acc = 0; target = null; }}, 180);
     let step = 0;
     if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) step = Math.sign(e.deltaY);
@@ -203,6 +242,7 @@ export default function (component) {{
   // 마우스로 끌기(터치는 기본 스크롤 + scroll-snap)
   let y0 = 0, top0 = 0, moved = 0, downItem = null;
   list.addEventListener('pointerdown', (e) => {{
+    viaKey = false;
     if (e.pointerType !== 'mouse' || e.button !== 0) return;
     dragging = true; moved = 0; y0 = e.clientY; top0 = list.scrollTop;
     downItem = e.target.closest ? e.target.closest('.wp-item') : null;  // 포인터를 잡으면 놓을 때 대상이 목록이 되므로 미리 기억
@@ -233,13 +273,53 @@ export default function (component) {{
     if (li) go(+li.dataset.i, true);
   }});
 
+  // 창을 벗어나면 끌던 상태를 푼다
+  window.addEventListener('blur', end);
+
+  // 글자로 건너뛰기: '수'·'수원' 또는 초성 'ㅅ'·'ㅅㅇ'. 한/영 전환 없이 영문 자판으로 쳐도(t → ㅅ) 찾는다.
+  // 0.6초 안에 이어 친 글자는 한 단어로 본다. 같은 글자를 거듭 치면 그 글자로 시작하는 다음 항목으로.
+  const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+  const KO = {{ q:'ㅂ', w:'ㅈ', e:'ㄷ', r:'ㄱ', t:'ㅅ', a:'ㅁ', s:'ㄴ', d:'ㅇ', f:'ㄹ', g:'ㅎ', z:'ㅋ', x:'ㅌ', c:'ㅊ', v:'ㅍ',
+               Q:'ㅃ', W:'ㅉ', E:'ㄸ', R:'ㄲ', T:'ㅆ' }};
+  const cho = (c) => {{ const n = c.charCodeAt(0) - 0xAC00; return n >= 0 && n < 11172 ? CHO[Math.floor(n / 588)] : c; }};
+  const fits = (text, q) => {{
+    const t = text.replace(/^[^0-9A-Za-z가-힣]+/, '').toLowerCase();
+    if (t.length < q.length) return false;
+    for (let j = 0; j < q.length; j++) {{
+      const a = t[j], b = q[j];
+      if (a !== b && !(CHO.includes(b) && cho(a) === b)) return false;
+    }}
+    return true;
+  }};
+  let typed = '', typedAt = 0;
+  const jump = (ch) => {{
+    const now = performance.now();
+    typed = now - typedAt < 600 ? typed + ch : ch;
+    typedAt = now;
+    const items = root._items, cur = Math.round(list.scrollTop / H);
+    const same = typed.length > 1 && [...typed].every(c => c === typed[0]);
+    const q = same ? typed[0] : typed;
+    const from = same || typed.length === 1 ? cur + 1 : cur;   // 한 글자: 다음 후보로, 이어 치기: 지금 자리부터
+    for (let k = 0; k < items.length; k++) {{
+      const i = (from + k) % items.length;
+      if (items[i].v >= 0 && fits(items[i].t, q)) return go(i, true);
+    }}
+    return null;
+  }};
+
   // 키보드
   list.addEventListener('keydown', (e) => {{
     const cur = Math.round(list.scrollTop / H);
     const to = {{ ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + 4, PageUp: cur - 4, Home: 0, End: root._items.length - 1 }}[e.key];
-    if (to === undefined) return;
+    if (e.key === 'Enter') {{ clearTimeout(wait); wait = null; commit(); return; }}
+    viaKey = true;
+    if (to !== undefined) {{ e.preventDefault(); go(to, true); return; }}
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.key.length !== 1) return;
+    if (e.key === ' ' && !typed) return;
     e.preventDefault();
-    go(to, true);
+    const ch = e.key.toLowerCase();
+    const keep = typed, keepAt = typedAt;
+    if (jump(ch) === null && KO[e.key]) {{ typed = keep; typedAt = keepAt; jump(KO[e.key]); }}   // 영문 자판으로 친 한글
   }});
 }}
 """

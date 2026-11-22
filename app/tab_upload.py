@@ -45,7 +45,7 @@ def upload_box(prefix: str = "work") -> None:
     if stt.is_mock:
         st.caption(f"지금은 샘플 모드라 파일을 외부로 보내지 않고 샘플 결과만 씁니다({stt.reason}).")
     else:
-        st.caption(f"추출을 누르면 올린 공고 파일이 {stt.label}로 전송됩니다. 추출한 지역·조건이 필터에 자동 적용됩니다.")
+        st.caption(f"'공고문에서 조건 추출'을 누르면 올린 파일이 {stt.label}(으)로 전송됩니다.")
     files = st.file_uploader(
         "공고 파일(여러 개 = 한 공고 묶음)", type=[e.lstrip(".") for e in ACCEPTED], accept_multiple_files=True, key=f"{prefix}-upload"
     )
@@ -137,19 +137,19 @@ def editor(draft: dict) -> None:
         a1, a2 = st.columns(2)
         max_area = a1.number_input("연면적 ㎡(0=없음)", 0.0, 100000.0, float(n.max_area or 0))
         ab = wheel_picker.wheel_select(a2, "연면적 경계", ["LE", "LT"], index=["LE", "LT"].index(n.area_bound), format_func=BOUND.get, key=f"draft-ab-{n.notice_id}")
-        uses = st.text_input("용도(쉼표 구분, 표준 토큰)", ", ".join(n.use_filter))
-        structs = st.text_input("구조(쉼표 구분)", ", ".join(n.structure_filter))
+        uses = st.text_input("용도(쉼표로 구분)", ", ".join(n.use_filter))
+        structs = st.text_input("구조(쉼표로 구분)", ", ".join(n.structure_filter))
         c1, c2 = st.columns(2)
         coll = wheel_picker.wheel_select(c1, "집합건물 제외", list(TRI), index=list(TRI.values()).index(n.collective_excluded), key=f"draft-coll-{n.notice_id}")
         multi = wheel_picker.wheel_select(c2, "공동주택 제외", list(TRI), index=list(TRI.values()).index(n.multi_housing_excluded), key=f"draft-multi-{n.notice_id}")
-        excl = st.text_area("제외대상(줄마다)", "\n".join(n.exclusions))
-        offmap = st.text_area("대장 외 조건 → 현장확인(줄마다)", "\n".join(n.offmap_conditions))
+        excl = st.text_area("제외대상(한 줄에 하나)", "\n".join(n.exclusions))
+        offmap = st.text_area("대장 외 조건 · 현장 확인(한 줄에 하나)", "\n".join(n.offmap_conditions))
         r1, r2 = st.columns(2)
         reception = r1.text_input("접수처", n.contact.reception or "")
         inquiry = r2.text_input("문의처", n.contact.inquiry or "")
         method = st.text_input("신청방법", n.contact.apply_method or "")
-        docs = st.text_input("제출서류(쉼표 구분)", ", ".join(n.contact.documents))
-        overwrite = st.checkbox("같은 ID가 있으면 덮어쓰기")
+        docs = st.text_input("제출서류(쉼표로 구분)", ", ".join(n.contact.documents))
+        overwrite = st.checkbox("같은 공고 ID가 있으면 덮어쓰기")
         saved = st.form_submit_button("검수 완료로 저장", type="primary")
     with right:
         st.markdown("**원문 근거**")
@@ -190,11 +190,11 @@ def editor(draft: dict) -> None:
             )
             final = NoticeConditions.model_validate(final.model_dump())
             if not final.sigungu_codes:
-                st.error("적용 시군구를 하나 이상 고르세요(탭2 공고 목록에 나타나려면 필요).")
+                st.error("적용 시군구를 하나 이상 고르세요. 그래야 작업 화면 사이드바 '공고' 목록에 나타납니다.")
                 return
             path = save_notice(final, overwrite=overwrite)
         except FileExistsError as e:
-            st.error(str(e) + " — 덮어쓰려면 체크하세요.")
+            st.error(str(e) + " 바꿔 저장하려면 '같은 공고 ID가 있으면 덮어쓰기'를 켜고 다시 저장하세요.")
             return
         except ValueError as e:
             st.error(f"저장할 수 없습니다: {e}")
@@ -204,4 +204,4 @@ def editor(draft: dict) -> None:
         st.session_state["reviewed"] = {"notice": final, "origin": origin}  # 처음 화면: 검수 끝 → '후보 건물 찾기' 열림
         msg = sidebar.apply_region(final.sigungu_codes, final.local_gov or "")
         st.session_state["pending_notice"] = (list(final.sigungu_codes), final.notice_id)  # 작업 화면에서 이 공고로 판정
-        st.success(f"저장했습니다: data/notices/{path.name} (검수 완료 · {date.today().isoformat()}). {msg}")
+        st.success(f"검수 완료로 저장했습니다({final.notice_id} · {date.today().isoformat()}). {msg}")

@@ -86,7 +86,7 @@ def draft_card(sgg: str | None) -> None:
     if draft.get("region"):
         st.caption(draft["region"])
     if draft.get("issues"):
-        st.caption(f"확인할 점 {len(draft['issues'])}건 · 아래 '조건 검수·수정'에서 원문 근거와 함께 볼 수 있습니다.")
+        st.caption(f"확인할 점 {len(draft['issues'])}건 · 아래 ② 조건 검수에서 원문 근거와 함께 봅니다.")
 
 
 def _draft_for(sgg: str | None) -> dict | None:
@@ -115,9 +115,8 @@ def review_editor(sgg: str | None) -> None:
     """② 추출한 조건 검수·수정(원문 근거, 검수 완료로 저장). 끝내야 '후보 건물 찾기'가 열린다."""
     draft = _draft_for(sgg)
     if draft is not None:
-        st.markdown("##### ② 조건 검수 · 원문과 대조한 뒤 '검수 완료로 저장'")
-        with st.expander("조건 검수·수정 · 원문 근거와 대조 (검수 필요)", expanded=True, icon=":material/edit_note:"):
-            tab_upload.editor(draft)
+        st.markdown("##### ② 조건 검수")
+        tab_upload.editor(draft)
         return
     n = _reviewed_for(sgg)
     if n is not None:
@@ -148,11 +147,29 @@ CSS = """
 }
 [class*="st-key-home-pick-"] button:hover { box-shadow: 0 6px 18px rgba(0,0,0,.14); }
 [class*="st-key-home-pick-"] button::after {
-  content: "expand_more"; font-family: "Material Symbols Rounded"; font-size: 1.6rem; margin-left: auto; padding-left: 12px;
+  content: "expand_more"; content: "expand_more" / ""; /* 아이콘 글자는 화면낭독기 이름에서 뺀다(구형 브라우저는 앞 줄) */
+  font-family: "Material Symbols Rounded"; font-size: 1.6rem; margin-left: auto; padding-left: 12px;
   transition: transform var(--m-panel) var(--m-ease);
 }
+[class*="st-key-home-pick-"] button p { word-break: keep-all; overflow-wrap: break-word; }
+[class*="st-key-home-pick-"] button > div { justify-content: flex-start; flex: 1 1 auto; min-width: 0; }
+/* 가운데 '또는'은 글자 폭만큼만 차지하고, 두 카드가 나머지를 나눈다. 폭이 좁으면 위아래로 쌓는다(창 크기가 아니라 칸 폭 기준) */
+.st-key-home-choices { container-type: inline-size; }
+.st-key-home-choices [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {
+  flex: 0 0 auto !important; width: auto !important; min-width: 0 !important;
+}
+.st-key-home-choices [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:not(:nth-child(2)) {
+  flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
+}
+@container (max-width: 680px) {
+  .st-key-home-choices [data-testid="stHorizontalBlock"] { flex-direction: column; align-items: stretch; }
+  .st-key-home-choices [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width: 100% !important; flex: 0 0 auto !important; }
+  .st-key-home-choices .home-or { height: auto; padding: 2px 0; }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .home-or { display: flex; align-items: center; justify-content: center; height: 112px; }
 .home-or span { padding: 6px 14px; border-radius: 999px; font-weight: 700; font-size: .95rem;
+  white-space: nowrap; word-break: keep-all; writing-mode: horizontal-tb;
   background: rgba(127,127,127,.14); }
 .st-key-home-panel-region, .st-key-home-panel-upload {
   animation: home-drop var(--m-panel) var(--m-ease) backwards; transform-origin: top center;
@@ -175,7 +192,7 @@ def choice_buttons() -> str | None:
     st.markdown(CSS, unsafe_allow_html=True)
     if mode:  # 고른 카드의 화살표를 뒤집는다(버튼은 화면에 남아 있어 회전이 부드럽게 보인다)
         st.markdown(f"<style>.st-key-home-pick-{mode} button::after{{transform:rotate(180deg)}}</style>", unsafe_allow_html=True)
-    left, mid, right = st.columns([10, 2, 10], vertical_alignment="center")
+    left, mid, right = st.container(key="home-choices").columns([10, 2, 10], vertical_alignment="center")
     for col, m in ((left, "region"), (right, "upload")):
         icon, title, desc = CHOICES[m]
         col.button(
@@ -183,6 +200,9 @@ def choice_buttons() -> str | None:
             type="primary" if mode == m else "secondary", use_container_width=True,
         )
     mid.markdown('<div class="home-or"><span>또는</span></div>', unsafe_allow_html=True)
+    # Streamlit 버튼에는 aria-expanded를 달 수 없어, 펼침 상태를 화면낭독기에 상태 문구로 알린다(늘 같은 자리에 두고 글만 바꾼다)
+    said = f"{CHOICES[mode][1]} 칸을 펼쳤습니다. 카드 아래에서 이어서 고르세요." if mode else ""
+    st.markdown(f'<p class="sr-only" role="status" aria-live="polite">{said}</p>', unsafe_allow_html=True)
     return mode
 
 
@@ -201,13 +221,11 @@ def _start_row(ready: bool, ready_msg: str, wait_msg: str, sgg: str | None = Non
 
 def _region_panel() -> None:
     with st.container(border=True, key="home-panel-region"):
-        st.caption("도 → 시·군 → 구·군 → 읍·면·동 순서로 고르거나, 이름으로 찾으세요. 동은 여러 개 고를 수 있습니다.")
         reg = region_picker.render(st, "home", row=True)
         clicked = False
         if reg.ready:
-            b, c = st.columns([1, 2], vertical_alignment="center")
+            b, _ = st.columns([1, 2])
             clicked = b.button("공고·조례 검색", type="primary", icon=":material/search:", key="home-search", use_container_width=True)
-            c.caption("조례의 점검 대상 기준을 보여 주고, 네이버에서 올해 공고를 찾아 조건을 추출·합성합니다.")
     if not reg.ready:
         return
     o = ordinances.get_ordinance(reg.sigungu_cd)
@@ -238,7 +256,7 @@ def _region_panel() -> None:
 
 def _upload_panel() -> None:
     with st.container(border=True, key="home-panel-upload"):
-        st.caption("HWP·HWPX·PDF·DOCX·XLSX·이미지. 여러 파일이면 한 공고로 묶어 추출합니다. 공고의 지자체가 지역 선택에 자동으로 들어갑니다.")
+        st.caption("HWP·HWPX·PDF·DOCX·XLSX·이미지. 여러 파일은 한 공고로 묶어 추출하고, 공고의 지자체를 지역으로 넣습니다.")
         tab_upload.upload_box("home")
     draft = st.session_state.get("draft")
     uploaded = draft is not None and draft.get("origin") == "upload"
@@ -272,5 +290,3 @@ def render() -> None:
         _region_panel()
     elif mode == "upload":
         _upload_panel()
-    else:
-        st.caption("둘 중 하나를 고르세요. 나중에 다른 쪽으로 바꿔도 고른 지역·추출한 조건은 그대로 남습니다.")

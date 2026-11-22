@@ -1,7 +1,7 @@
 """소규모 노후건축물 안전점검 지원 대상 선별 — Streamlit 앱.
 
 처음 화면(app/home.py): 지역 선택(도·시·구·동, 이름 검색) | 공고문 올리기 → '공고·조례 검색' 버튼 → '후보 건물 찾기'.
-작업 화면: 사이드바(지역·공고·옵션) + ① 지역 일괄 대조 ② 지도 ③ 안내문. 공고 분석·조건 검수는 처음 화면에서.
+작업 화면: 사이드바(지역·공고·옵션) + 지역 일괄 대조 | 지도 | 안내문(단계 번호는 단계 표시줄에만). 공고 분석·조건 검수는 처음 화면에서.
 
 실행(저장소 루트):  streamlit run app/main.py
 
@@ -20,12 +20,12 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from app import home, map_view, motion, sidebar, state, tab_hunt, tab_letters, tab_region  # noqa: E402
+from app import home, map_view, motion, sidebar, state, tab_letters, tab_region  # noqa: E402
 
 SECTIONS = {
-    "region": "① 지역 일괄 대조",
-    "map": "② 지도",
-    "letters": "③ 안내문 및 결과 리포트",
+    "region": "지역 일괄 대조",
+    "map": "지도",
+    "letters": "안내문·결과 리포트",
 }
 
 st.set_page_config(page_title="노후건축물 안전점검 대상 선별", layout="wide")
@@ -45,15 +45,13 @@ def work() -> None:
         return
     st.markdown(f"### {ctx.region_label}")
     motion.step_bar(st.session_state.get("section") or "region", scope="section")
-    res = tab_hunt.result(ctx.sigungu_cd)  # 검색은 버튼으로만(처음 화면·① 화면)
-    tab_hunt.summary(res, ctx.eval_date, ctx.region_label)
     if st.session_state.get("section") not in SECTIONS:  # 공고 분석·조건 편집은 처음 화면에서 한다
         st.session_state.pop("section", None)
     kwargs = {} if "section" in st.session_state else {"default": "region"}
     section = st.segmented_control(
         "화면", list(SECTIONS), format_func=SECTIONS.get, key="section", label_visibility="collapsed", **kwargs
     ) or "region"
-    with motion.view(section, scope="section"):  # ①②③ 사이를 옮기면 진행 방향으로 들어온다
+    with motion.view(section, scope="section"):  # 화면 사이를 옮기면 진행 방향으로 들어온다
         if section == "region":
             tab_region.render(ctx)
         elif section == "letters":
