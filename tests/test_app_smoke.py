@@ -105,7 +105,9 @@ def test_home_cascade_doe_si_gu_dong_then_start(fakes):
     assert at.selectbox(key="home-gu").options == ["장안구", "권선구", "팔달구", "영통구"]
     at.selectbox(key="home-gu").set_value("장안구").run()
     assert not at.exception
-    assert any("조례" in m.value for m in at.markdown)  # 조례 카드
+    assert not any("점검 대상" in m.value for m in at.markdown)  # 고르기만 해서는 검색하지 않음
+    at.button(key="home-search").click().run()
+    assert any("점검 대상" in m.value for m in at.markdown)  # 조례 카드
     start = next(b for b in at.button if b.label == "후보 건물 찾기 →")
     assert start.disabled  # 동을 아직 안 고름
     from core import regions
@@ -160,12 +162,10 @@ def test_letters_and_map_sections_use_session_result(fakes):
     assert fakes == ["10100"]
 
 
-def test_notice_section_renders(fakes):
+def test_work_sections_have_no_notice_tab(fakes):
     at = open_work()
-    at.segmented_control[0].set_value("notice").run()
-    assert not at.exception
-    heads = [s.value for s in at.subheader]
-    assert "공고 파일 올려 조건 추출" in heads and "이 지역 공고 찾기" in heads and "저장된 공고 보기" in heads
+    assert at.segmented_control[0].options == ["① 지역 일괄 대조", "② 안내문 및 결과 리포트", "③ 지도"]
+    assert at.segmented_control[0].value == "region"
 
 
 def test_missing_building_key_shows_error(fakes, monkeypatch):
@@ -188,25 +188,27 @@ def test_notice_region_applied_to_region_picker(fakes):
     assert at.selectbox(key="home-gu").value == "장안구" and at.checkbox(key="home-all-41111").value is True
 
 
-def test_upload_draft_shows_period_warning_and_sources(fakes):
+def test_home_review_editor_shows_period_warning_and_sources(fakes):
+    """처음 화면에서 바로 조건 검수·수정: 접수기간 경고, 합친 글 주소, 저장 버튼."""
     from datetime import date
 
     from core.conditions import NoticeConditions
 
     n = NoticeConditions(notice_id="daejeon-test", local_gov="대전광역시 중구", sigungu_codes=["30140"],
                          apply_start=date(2026, 9, 1), apply_end=date(2026, 9, 30), min_years=30)
-    at = open_work("30140", all_dongs=True)
-    at.session_state["section"] = "notice"
-    at.session_state["draft"] = {"notice": n, "issues": [], "classify": {"repair": False}, "provider": "mock:mock",
-                                 "usage": "", "region": "공고 지역(대전광역시 중구)을 지역 선택에 적용했습니다",
+    at = open_home("upload")
+    at.session_state["draft"] = {"origin": "upload", "notice": n, "issues": [], "classify": {"repair": False},
+                                 "provider": "mock:mock", "usage": "", "region": "공고 지역(대전광역시 중구)을 지역 선택에 적용했습니다",
                                  "sources": [(1, "2026년 안전점검 신청 안내", "https://www.djjunggu.go.kr/1", "공고")]}
+    at.session_state["region"] = {"sgg": "30140", "all": True, "dongs": [], "v": 4}
     at.run()
     assert not at.exception
+    assert any("조건 검수·수정" in e.label for e in at.expander)
     warnings = " ".join(w.value for w in at.warning)
     if date.today() > date(2026, 9, 30):
         assert "사업기간 아님" in warnings
-    assert any("지역 선택에 적용" in i.value for i in at.info)
     assert any("[출처 1]" in m.value and "djjunggu" in m.value for m in at.markdown)
+    assert any(b.label == "검수 완료로 저장" for b in at.button)
 
 
 def _merged_result(url: str, sgg: str = "11110"):
@@ -235,8 +237,10 @@ def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
     at = open_home()
     at.text_input(key="home-q").input("종로구").run()
     at.selectbox(key="home-hit").set_value(0).run()
+    assert not at.exception and seen == []  # 지역만 골라서는 검색하지 않음
+    at.button(key="home-search").click().run()
     assert not at.exception
-    assert seen == ["11110"]  # 시군구마다 한 번
+    assert seen == ["11110"]
     top = " ".join(x.value for x in at.success) + " ".join(x.value for x in at.warning)
     assert url in top
     assert at.checkbox(key="home-all-11110").value is True  # 공고 지역 → 동 전체
@@ -245,6 +249,7 @@ def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
     assert not at.exception
     assert at.selectbox(key="notice-11110-False").value == "auto-notice"
     assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음
+    assert any("조건을 추출해 합쳤습니다" in x.value for x in list(at.success) + list(at.warning))  # 검색 결과 요약은 남는다
 
 
 def test_uploaded_draft_is_not_overwritten_by_auto_search(fakes, monkeypatch):
@@ -265,5 +270,7 @@ def test_uploaded_draft_is_not_overwritten_by_auto_search(fakes, monkeypatch):
     assert any("추출한 공고 조건" in m.value for m in at.markdown)
     assert next(b for b in at.button if b.label == "후보 건물 찾기 →").disabled is False
     at.button(key="home-pick-region").click().run()
+    assert not at.exception and calls == []  # 고르기만 해서는 검색하지 않음
+    at.button(key="home-search").click().run()
     assert not at.exception and calls == [None]  # LLM 추출 없이 검색만
     assert at.session_state["draft"]["notice"].notice_id == "uploaded"

@@ -52,14 +52,6 @@ def upload_box(prefix: str = "work") -> None:
         _run(files)
 
 
-def render() -> None:
-    st.subheader("공고 파일 올려 조건 추출")
-    upload_box("work")
-    draft = st.session_state.get("draft")
-    if draft:
-        _editor(draft)
-
-
 def _run(files) -> None:
     pre = to_parts([UploadedFile(f.name, f.getvalue()) for f in files])
     for s in pre.skipped:
@@ -87,7 +79,7 @@ def _run(files) -> None:
     if r.notice.sigungu_codes:
         st.session_state["pending_notice"] = (list(r.notice.sigungu_codes), r.notice.notice_id)
     st.session_state["draft"] = {
-        "origin": "upload",  # 공고 자동 검색이 이 초안을 덮어쓰지 않게
+        "origin": "upload",  # 공고 검색이 이 초안을 덮어쓰지 않게
         "region": region_msg,
         "notice": r.notice,
         "issues": r.issues,
@@ -102,7 +94,7 @@ def _lines(text: str) -> list[str]:
     return [x.strip() for x in text.splitlines() if x.strip()]
 
 
-def _editor(draft: dict) -> None:
+def editor(draft: dict) -> None:
     n: NoticeConditions = draft["notice"]
     st.markdown(
         f"**추출 결과** · {draft['provider']} · :orange-badge[미검수]"
@@ -165,7 +157,7 @@ def _editor(draft: dict) -> None:
             st.info(n.evidence[k])
         else:
             st.caption("원문 인용이 없습니다.")
-        st.caption("값을 원문과 대조한 뒤 저장하세요. 저장하면 탭2 공고 목록에 바로 나타납니다.")
+        st.caption("값을 원문과 대조한 뒤 저장하세요. 저장하면 작업 화면 사이드바 '공고' 목록에 바로 나타납니다.")
 
     if saved:
         split = lambda s: [x.strip() for x in s.split(",") if x.strip()]  # noqa: E731

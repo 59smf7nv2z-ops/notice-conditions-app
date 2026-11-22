@@ -1,6 +1,6 @@
-"""공고 찾기: 지역을 고르면 네이버 검색 → 올해 공고로 보이는 글 여러 건을 분류·추출해 한 조건으로 합친다.
+"""공고 찾기: '검색'을 누르면 네이버 검색 → 올해 공고로 보이는 글 여러 건을 분류·추출해 한 조건으로 합친다.
 
-- ensure: 시군구마다 세션에서 한 번만 찾는다(검색 3회 + 글마다 LLM 1회, 자동은 최대 3건). 끌 수 있다.
+- search: '검색' 버튼을 눌렀을 때만 찾는다(검색 3회 + 글마다 LLM 1회, 최대 3건). 지역을 고르기만 해서는 호출하지 않는다.
   합친 조건은 초안(미검수)으로 열고, 사이드바 '공고'에서 고른 상태로, 공고 지역(읍·면·동 전체)을 지역 선택에 적용한다.
 - panel: 후보 목록(인터넷 주소). 여러 글에 체크해 '추출·합성'을 다시 할 수 있다. 같은 글은 LLM을 다시 부르지 않는다.
 - 검수된 공고(접수 마감 전)가 있으면 검색하지 않는다. 첨부파일(HWP·PDF)은 링크만 보여 준다.
@@ -20,7 +20,6 @@ from core.llm.base import LLMError, usage_summary
 from core.notice_merge import SOURCE_LABEL
 
 KIND = {"news": "뉴스", "web": "웹문서"}
-AUTO_KEY = "auto_hunt_on"
 MAX_PICK = 6  # 한 번에 추출할 수 있는 글 수(글마다 LLM 1회)
 
 
@@ -30,15 +29,6 @@ def _hunts() -> dict:
 
 def _cache() -> dict:
     return st.session_state.setdefault("extracted", {})  # 주소 → SourceResult (같은 글 LLM 재호출 방지)
-
-
-def auto_toggle(box, prefix: str) -> bool:
-    on = box.toggle(
-        "지역을 고르면 공고 자동 검색·추출", st.session_state.get(AUTO_KEY, True), key=f"{prefix}-auto",
-        help=f"네이버 검색 3회, 올해 공고로 보이는 글이 있으면 최대 {nh.AUTO_MAX_SOURCES}건을 추출(글마다 LLM 1회)해 합칩니다. 시군구마다 한 번만.",
-    )
-    st.session_state[AUTO_KEY] = on
-    return on
 
 
 def _set_draft(sgg: str, a: nh.AutoExtract, provider_name: str) -> str:
@@ -63,28 +53,32 @@ def _set_draft(sgg: str, a: nh.AutoExtract, provider_name: str) -> str:
     return region
 
 
-def ensure(sgg: str, label: str, eval_date: date, has_ordinance: bool) -> nh.HuntResult | None:
-    """자동 검색(켜져 있고 이 시군구를 아직 안 찾았으면). 합칠 글이 있으면 초안을 열고 화면을 다시 그린다."""
+def search(sgg: str, label: str, eval_date: date, has_ordinance: bool) -> nh.HuntResult:
+    """'검색' 버튼: 네이버 검색 → 올해 공고로 보이는 글 최대 3건을 추출해 합친다. 합치면 초안을 열고 다시 그린다."""
     hunts = _hunts()
-    if st.session_state.get(AUTO_KEY, True) and sgg not in hunts:
-        stt = factory.status("extract")
-        provider = None if stt.is_mock else factory.get_provider("extract")  # 샘플 모드에선 검색만(샘플 조건이 실제처럼 보이지 않게)
-        draft = st.session_state.get("draft") or {}
-        if draft.get("origin") == "upload" and sgg in draft["notice"].sigungu_codes:
-            provider = None  # 올린 공고문에서 뽑은 조건이 있으면 검색만 한다(덮어쓰지 않음)
-        with st.spinner(f"{label} 공고 찾는 중" + ("" if provider is None else " · 찾으면 바로 조건 추출")):
-            try:
-                res = nh.hunt(sgg, label, eval_date, has_ordinance, auto_provider=provider, cache=_cache())
-            except nh.HunterError as e:
-                res = nh.HuntResult("none", message=str(e))
-        hunts[sgg] = res
-        a = res.auto
-        if a and a.merged is not None:
-            for code in a.merged.notice.sigungu_codes:  # 같은 공고 지역(수원시 4개 구 등)은 다시 찾지 않는다
-                hunts.setdefault(code, res)
-            _set_draft(sgg, a, getattr(provider, "name", "mock"))
-            st.rerun()
-    return hunts.get(sgg)
+    stt = factory.status("extract")
+    provider = None if stt.is_mock else factory.get_provider("extract")  # 샘플 모드에선 검색만(샘플 조건이 실제처럼 보이지 않게)
+    draft = st.session_state.get("draft") or {}
+    if draft.get("origin") == "upload" and sgg in draft["notice"].sigungu_codes:
+        provider = None  # 올린 공고문에서 뽑은 조건이 있으면 검색만 한다(덮어쓰지 않음)
+    with st.spinner(f"{label} 공고 찾는 중" + ("" if provider is None else " · 찾으면 바로 조건 추출")):
+        try:
+            res = nh.hunt(sgg, label, eval_date, has_ordinance, auto_provider=provider, cache=_cache())
+        except nh.HunterError as e:
+            res = nh.HuntResult("none", message=str(e))
+    hunts[sgg] = res
+    a = res.auto
+    if a and a.merged is not None:
+        for code in a.merged.notice.sigungu_codes:  # 같은 공고 지역(수원시 4개 구 등)은 결과를 함께 쓴다
+            hunts.setdefault(code, res)
+        _set_draft(sgg, a, getattr(provider, "name", "mock"))
+        st.rerun()
+    return res
+
+
+def result(sgg: str) -> nh.HuntResult | None:
+    """이 시군구에서 '검색'을 누른 결과(없으면 None)."""
+    return _hunts().get(sgg)
 
 
 def summary(res: nh.HuntResult | None, eval_date: date, label: str) -> None:
@@ -131,16 +125,11 @@ def panel(sgg: str, label: str, eval_date: date, has_ordinance: bool, prefix: st
     """후보 목록과 여러 글 추출·합성."""
     hunts = _hunts()
     c1, c2 = st.columns([1, 3])
-    if c1.button("다시 찾기" if sgg in hunts else "공고 찾기", key=f"{prefix}-hunt-btn"):
-        with st.spinner("찾는 중"):
-            try:
-                hunts[sgg] = nh.hunt(sgg, label, eval_date, has_ordinance)
-            except nh.HunterError as e:
-                st.error(str(e))
-                return
+    if c1.button("다시 검색" if sgg in hunts else "공고 검색", key=f"{prefix}-hunt-btn", icon=":material/search:"):
+        search(sgg, label, eval_date, has_ordinance)
     res: nh.HuntResult | None = hunts.get(sgg)
     if res is None:
-        c2.caption("자동 검색이 꺼져 있습니다. '공고 찾기'를 누르세요.")
+        c2.caption("'공고 검색'을 누르면 네이버에서 이 지역 공고를 찾아 조건을 추출합니다.")
         return
     c2.caption(res.message + (f" (검색 호출 {res.calls}회)" if res.calls else ""))
     if res.stage == "reviewed":
@@ -200,10 +189,3 @@ def panel(sgg: str, label: str, eval_date: date, has_ordinance: bool, prefix: st
             return
         _set_draft(sgg, a2, provider.name)
         st.rerun()
-
-
-def render(ctx) -> None:
-    """'① 공고문 분석' 위쪽."""
-    st.subheader("이 지역 공고 찾기")
-    st.caption(f"{ctx.region_label} · 검수된 공고 → 네이버 검색(구청 게시판 웹문서·뉴스) 순서로 찾습니다. 첨부파일은 링크만 보여 드립니다.")
-    panel(ctx.sigungu_cd, ctx.region_label, ctx.eval_date, ctx.ordinance is not None, "work")

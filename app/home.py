@@ -1,6 +1,6 @@
 """처음 화면: 지역 선택(도 → 시·군 → 구·군 → 읍·면·동, 이름 검색) | 공고문 직접 올리기.
 
-지역(구·군)을 고르면 그 지역 조례(소규모 노후건축물 점검 대상 규모)를 보여 주고, 공고를 자동으로 찾아 조건을 추출·합성한다.
+지역(구·군)을 고르고 '공고·조례 검색'을 누르면 조례(소규모 노후건축물 점검 대상 규모)를 보여 주고, 공고를 찾아 조건을 추출·합성한다.
 '후보 건물 찾기'를 누르면 작업 화면(② 지역 일괄 대조)으로 넘어간다.
 """
 
@@ -94,14 +94,24 @@ def draft_card(sgg: str | None) -> None:
     if draft.get("region"):
         st.caption(draft["region"])
     if draft.get("issues"):
-        st.caption(f"확인할 점 {len(draft['issues'])}건 · 원문 근거는 '조건 검수·수정'에서 볼 수 있습니다.")
-    if st.button("조건 검수·수정하기", key="home-review"):
-        _go("notice")
+        st.caption(f"확인할 점 {len(draft['issues'])}건 · 아래 '조건 검수·수정'에서 원문 근거와 함께 볼 수 있습니다.")
+
+
+def review_editor(sgg: str | None) -> None:
+    """추출한 조건 검수·수정(원문 근거, 검수 완료로 저장). 처음 화면에서 바로 한다."""
+    draft = st.session_state.get("draft")
+    if not draft:
+        return
+    n = draft["notice"]
+    if sgg and n.sigungu_codes and sgg not in n.sigungu_codes:
+        return
+    with st.expander("조건 검수·수정 · 원문 근거와 대조", expanded=False, icon=":material/edit_note:"):
+        tab_upload.editor(draft)
 
 
 MODE_KEY = "home_mode"  # None | "region" | "upload"
 CHOICES = {
-    "region": (":material/location_on:", "지역 선택", "도·시·구·동을 고르면 조례와 공고를 자동으로 찾습니다"),
+    "region": (":material/location_on:", "지역 선택", "도·시·구·동을 고르고 검색하면 조례와 공고를 찾습니다"),
     "upload": (":material/upload_file:", "공고문 직접 올리기", "가진 공고 파일에서 조건과 지역을 바로 뽑습니다"),
 }
 
@@ -173,21 +183,30 @@ def _region_panel() -> None:
     with st.container(border=True, key="home-panel-region"):
         st.caption("도 → 시·군 → 구·군 → 읍·면·동 순서로 고르거나, 이름으로 찾으세요. 동은 여러 개 고를 수 있습니다.")
         reg = region_picker.render(st, "home")
-        tab_hunt.auto_toggle(st, "home")
+        clicked = False
+        if reg.ready:
+            b, c = st.columns([1, 2], vertical_alignment="center")
+            clicked = b.button("공고·조례 검색", type="primary", icon=":material/search:", key="home-search", use_container_width=True)
+            c.caption("조례의 점검 대상 기준을 보여 주고, 네이버에서 올해 공고를 찾아 조건을 추출·합성합니다.")
     if not reg.ready:
         return
     o = ordinances.get_ordinance(reg.sigungu_cd)
-    res = tab_hunt.ensure(reg.sigungu_cd, reg.label, date.today(), o is not None)
+    if clicked:
+        tab_hunt.search(reg.sigungu_cd, reg.label, date.today(), o is not None)
+    res = tab_hunt.result(reg.sigungu_cd)
+    if res is None:
+        return
 
     st.markdown(f"#### {reg.label} · 조례와 공고")
     c1, c2 = st.columns([2, 3], gap="large")
     with c1, st.container(border=True):
         ordinance_card(o)
     with c2, st.container(border=True):
-        st.markdown("**공고 자동 검색(네이버)**")
+        st.markdown("**공고 검색(네이버)**")
         tab_hunt.summary(res, date.today(), reg.label)
         draft_card(reg.sigungu_cd)
-    with st.expander("공고 검색 결과 · 여러 글을 골라 조건 합치기", expanded=bool(res and res.stage == "search" and not (res.auto and res.auto.merged))):
+    review_editor(reg.sigungu_cd)
+    with st.expander("공고 검색 결과 · 여러 글을 골라 조건 합치기", expanded=bool(res.stage == "search" and not (res.auto and res.auto.merged))):
         tab_hunt.panel(reg.sigungu_cd, reg.label, date.today(), o is not None, "home")
     _start_row(
         bool(reg.bjdong_cds),
@@ -214,6 +233,7 @@ def _upload_panel() -> None:
             ordinance_card(ordinances.get_ordinance(reg.sigungu_cd))
         else:
             st.warning("공고에서 지자체를 찾지 못했습니다. 위에서 '지역 선택'을 눌러 지역을 고르세요.")
+    review_editor(None)
     _start_row(reg.ready and bool(reg.bjdong_cds), f"{reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳.", "지역을 먼저 고르세요.")
 
 
