@@ -78,6 +78,7 @@ def _run(files) -> None:
     region_msg = sidebar.apply_region(r.notice.sigungu_codes, r.notice.local_gov or "")
     if r.notice.sigungu_codes:
         st.session_state["pending_notice"] = (list(r.notice.sigungu_codes), r.notice.notice_id)
+    st.session_state.pop("reviewed", None)  # 새 초안은 다시 검수해야 한다
     st.session_state["draft"] = {
         "origin": "upload",  # 공고 검색이 이 초안을 덮어쓰지 않게
         "region": region_msg,
@@ -197,6 +198,9 @@ def editor(draft: dict) -> None:
         except ValueError as e:
             st.error(f"저장할 수 없습니다: {e}")
             return
+        origin = draft.get("origin")
         st.session_state.pop("draft", None)
+        st.session_state["reviewed"] = {"notice": final, "origin": origin}  # 처음 화면: 검수 끝 → '후보 건물 찾기' 열림
         msg = sidebar.apply_region(final.sigungu_codes, final.local_gov or "")
+        st.session_state["pending_notice"] = (list(final.sigungu_codes), final.notice_id)  # 작업 화면에서 이 공고로 판정
         st.success(f"저장했습니다: data/notices/{path.name} (검수 완료 · {date.today().isoformat()}). {msg}")

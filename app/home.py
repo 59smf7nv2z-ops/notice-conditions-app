@@ -10,25 +10,17 @@ from datetime import date
 
 import streamlit as st
 
-from app import region_picker, tab_hunt, tab_upload
+from app import motion, region_picker, tab_hunt, tab_upload
 from core import ordinances
 from core.ordinances import OrdinanceConditions
 
 HERO = """
-<div style="padding:28px 0 8px 0">
-  <div style="font-size:0.95rem;color:#2e7d32;font-weight:600;letter-spacing:0.02em">구청 건축안전 실무용</div>
-  <div style="font-size:2.3rem;font-weight:800;line-height:1.25;margin:6px 0 10px 0">소규모 노후건축물<br>안전점검 지원 대상 찾기</div>
-  <div style="font-size:1.05rem;opacity:0.8;max-width:760px">
+<div style="padding:24px 0 0 0">
+  <h1 style="font-size:2.3rem;font-weight:800;line-height:1.25;margin:0 0 10px 0;padding:0">소규모 노후건축물<br>안전점검 지원 대상 찾기</h1>
+  <p style="font-size:1.05rem;opacity:0.82;max-width:760px;margin:0">
     지역을 고르면 그 지역 조례와 올해 공고를 찾아 지원 조건을 뽑고, 건축물대장에서 조건에 맞는 건물을 골라 드립니다.
     결과는 '자격 후보'이며 최종 선정은 담당자·위원회가 합니다.
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;font-size:0.9rem">
-    <span style="padding:4px 12px;border-radius:999px;background:rgba(46,125,50,0.12)">1 지역·공고 조건</span>
-    <span style="opacity:0.5">→</span>
-    <span style="padding:4px 12px;border-radius:999px;background:rgba(127,127,127,0.12)">2 후보 목록·지도</span>
-    <span style="opacity:0.5">→</span>
-    <span style="padding:4px 12px;border-radius:999px;background:rgba(127,127,127,0.12)">3 안내문</span>
-  </div>
+  </p>
 </div>
 """
 
@@ -97,16 +89,39 @@ def draft_card(sgg: str | None) -> None:
         st.caption(f"확인할 점 {len(draft['issues'])}건 · 아래 '조건 검수·수정'에서 원문 근거와 함께 볼 수 있습니다.")
 
 
-def review_editor(sgg: str | None) -> None:
-    """추출한 조건 검수·수정(원문 근거, 검수 완료로 저장). 처음 화면에서 바로 한다."""
+def _draft_for(sgg: str | None) -> dict | None:
+    """이 지역에 걸린 미검수 초안(없으면 None). sgg=None이면 지역과 상관없이."""
     draft = st.session_state.get("draft")
     if not draft:
-        return
+        return None
     n = draft["notice"]
     if sgg and n.sigungu_codes and sgg not in n.sigungu_codes:
+        return None
+    return draft
+
+
+def _reviewed_for(sgg: str | None, origin: str | None = None):
+    """이 지역에서 '검수 완료로 저장'한 공고(없으면 None)."""
+    r = st.session_state.get("reviewed")
+    if not r or (origin and r.get("origin") != origin):
+        return None
+    n = r["notice"]
+    if sgg and sgg not in n.sigungu_codes:
+        return None
+    return n
+
+
+def review_editor(sgg: str | None) -> None:
+    """② 추출한 조건 검수·수정(원문 근거, 검수 완료로 저장). 끝내야 '후보 건물 찾기'가 열린다."""
+    draft = _draft_for(sgg)
+    if draft is not None:
+        st.markdown("##### ② 조건 검수 · 원문과 대조한 뒤 '검수 완료로 저장'")
+        with st.expander("조건 검수·수정 · 원문 근거와 대조 (검수 필요)", expanded=True, icon=":material/edit_note:"):
+            tab_upload.editor(draft)
         return
-    with st.expander("조건 검수·수정 · 원문 근거와 대조", expanded=False, icon=":material/edit_note:"):
-        tab_upload.editor(draft)
+    n = _reviewed_for(sgg)
+    if n is not None:
+        st.success(f"② 검수 완료 · {n.program_name or n.notice_id} — 이 조건으로 후보 건물을 찾습니다.", icon=":material/task_alt:")
 
 
 MODE_KEY = "home_mode"  # None | "region" | "upload"
@@ -125,26 +140,26 @@ CSS = """
 [class*="st-key-home-pick-"] button {
   min-height: 112px; width: 100%; padding: 18px 22px; border-radius: 14px;
   justify-content: flex-start; text-align: left; white-space: normal;
-  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .18s ease;
+  transition: box-shadow .18s var(--m-ease), border-color .18s var(--m-ease), background-color .18s var(--m-ease);
 }
 [class*="st-key-home-pick-"] button p { font-size: 1.05rem; line-height: 1.45; }
 [class*="st-key-home-pick-"] button div, [class*="st-key-home-pick-"] button p {
   white-space: normal; overflow: visible; text-overflow: clip; text-align: left;
 }
-[class*="st-key-home-pick-"] button:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+[class*="st-key-home-pick-"] button:hover { box-shadow: 0 6px 18px rgba(0,0,0,.14); }
 [class*="st-key-home-pick-"] button::after {
   content: "expand_more"; font-family: "Material Symbols Rounded"; font-size: 1.6rem; margin-left: auto; padding-left: 12px;
-  transition: transform .3s ease;
+  transition: transform var(--m-panel) var(--m-ease);
 }
 .home-or { display: flex; align-items: center; justify-content: center; height: 112px; }
 .home-or span { padding: 6px 14px; border-radius: 999px; font-weight: 700; font-size: .95rem;
   background: rgba(127,127,127,.14); }
 .st-key-home-panel-region, .st-key-home-panel-upload {
-  animation: home-drop .38s cubic-bezier(.2,.8,.2,1) both; transform-origin: top center;
+  animation: home-drop var(--m-panel) var(--m-ease) backwards; transform-origin: top center;
 }
 @media (max-width: 640px) { .home-or { height: auto; padding: 2px 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .st-key-home-panel-region, .st-key-home-panel-upload { animation: none; }
+  .st-key-home-panel-region, .st-key-home-panel-upload { animation: view-fade 160ms ease-out backwards; }
   [class*="st-key-home-pick-"] button, [class*="st-key-home-pick-"] button::after { transition: none; }
 }
 </style>
@@ -171,12 +186,17 @@ def choice_buttons() -> str | None:
     return mode
 
 
-def _start_row(ready: bool, ready_msg: str, wait_msg: str) -> None:
+REVIEW_FIRST = "먼저 위 ② 조건 검수에서 원문과 대조하고 '검수 완료로 저장'을 누르세요."
+
+
+def _start_row(ready: bool, ready_msg: str, wait_msg: str, sgg: str | None = None) -> None:
+    """③ 후보 건물 찾기. 미검수 초안이 있으면 잠근다(검수 → 대조 순서)."""
     st.divider()
+    pending = _draft_for(sgg) is not None
     a, b = st.columns([1, 2])
-    if a.button("후보 건물 찾기 →", type="primary", disabled=not ready, use_container_width=True):
+    if a.button("③ 후보 건물 찾기 →", type="primary", disabled=pending or not ready, use_container_width=True, key="home-start"):
         _go("region")
-    b.caption(ready_msg if ready else wait_msg)
+    b.caption(REVIEW_FIRST if pending else ready_msg if ready else wait_msg)
 
 
 def _region_panel() -> None:
@@ -197,7 +217,7 @@ def _region_panel() -> None:
     if res is None:
         return
 
-    st.markdown(f"#### {reg.label} · 조례와 공고")
+    st.markdown(f"##### ① {reg.label} · 조례와 공고 조건")
     c1, c2 = st.columns([2, 3], gap="large")
     with c1, st.container(border=True):
         ordinance_card(o)
@@ -212,6 +232,7 @@ def _region_panel() -> None:
         bool(reg.bjdong_cds),
         f"{reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳 선택. 다음 화면에서 '조회·판정'으로 건축물대장을 조회합니다.",
         "읍·면·동을 하나 이상 고르거나 '전체'를 켜세요.",
+        reg.sigungu_cd,
     )
 
 
@@ -220,12 +241,18 @@ def _upload_panel() -> None:
         st.caption("HWP·HWPX·PDF·DOCX·XLSX·이미지. 여러 파일이면 한 공고로 묶어 추출합니다. 공고의 지자체가 지역 선택에 자동으로 들어갑니다.")
         tab_upload.upload_box("home")
     draft = st.session_state.get("draft")
-    if not draft or draft.get("origin") != "upload":
+    uploaded = draft is not None and draft.get("origin") == "upload"
+    saved = _reviewed_for(None, origin="upload")
+    if not uploaded and saved is None:
         return
     reg = region_picker.current()
+    st.markdown("##### ① 공고에서 뽑은 조건")
     c1, c2 = st.columns([2, 3], gap="large")
     with c2, st.container(border=True):
-        draft_card(None)
+        if uploaded:
+            draft_card(None)
+        else:
+            st.markdown(f"**공고 조건** · {saved.program_name or saved.notice_id} :green-badge[검수 완료]")
     with c1, st.container(border=True):
         if reg.ready:
             st.markdown(f"**지역** {reg.label} · 읍·면·동 {len(reg.bjdong_cds)}곳")
@@ -239,6 +266,7 @@ def _upload_panel() -> None:
 
 def render() -> None:
     st.markdown(HERO, unsafe_allow_html=True)
+    motion.step_bar("home")
     mode = choice_buttons()
     if mode == "region":
         _region_panel()

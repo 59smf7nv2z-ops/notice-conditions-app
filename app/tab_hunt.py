@@ -38,6 +38,7 @@ def _set_draft(sgg: str, a: nh.AutoExtract, provider_name: str) -> str:
     region = sidebar.apply_region(n.sigungu_codes or [sgg], n.local_gov or "", current=sgg)
     st.session_state["pending_notice"] = (list(n.sigungu_codes or [sgg]), n.notice_id)
     used = a.used
+    st.session_state.pop("reviewed", None)  # 새 초안은 다시 검수해야 한다
     st.session_state["draft"] = {
         "region": region,
         "notice": n,
@@ -95,7 +96,7 @@ def summary(res: nh.HuntResult | None, eval_date: date, label: str) -> None:
         state, msg = n.period_status(eval_date)
         body = (f"공고 글 {len(a.merged.sources)}건에서 조건을 추출해 합쳤습니다: {links}  \n"
                 f"{'접수 중 · ' if state == 'OPEN' else '⚠️ '}{msg}  \n"
-                "원문 근거와 대조해 검수·수정하세요(지금은 미검수 초안으로 판정).")
+                "아래 ② 조건 검수에서 원문과 대조해 저장해야 후보 건물을 찾을 수 있습니다.")
         (st.success if state == "OPEN" else st.warning)(body)
         return
     if a and a.region_mismatch:

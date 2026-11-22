@@ -51,6 +51,17 @@ def fakes(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def notice_dir(tmp_path, monkeypatch):
+    """'검수 완료로 저장'이 data/notices 대신 임시 폴더에 쓰고 읽게."""
+    from app import sidebar, tab_upload
+    from core import notices
+
+    monkeypatch.setattr(tab_upload, "save_notice", lambda n, overwrite=False: notices.save_notice(n, tmp_path, overwrite))
+    monkeypatch.setattr(sidebar, "load_notices", lambda: notices.load_notices(tmp_path))
+    return tmp_path
+
+
 def open_work(sgg: str = "11110", dongs: list[str] | None = None, all_dongs: bool = False) -> AppTest:
     """처음 화면을 건너뛰고 작업 화면을 연다(지역: 종로구 청운동)."""
     at = AppTest.from_file(APP, default_timeout=60)
@@ -108,14 +119,14 @@ def test_home_cascade_doe_si_gu_dong_then_start(fakes):
     assert not any("점검 대상" in m.value for m in at.markdown)  # 고르기만 해서는 검색하지 않음
     at.button(key="home-search").click().run()
     assert any("점검 대상" in m.value for m in at.markdown)  # 조례 카드
-    start = next(b for b in at.button if b.label == "후보 건물 찾기 →")
+    start = at.button(key="home-start")
     assert start.disabled  # 동을 아직 안 고름
     from core import regions
 
     two = [c for c, _ in regions.list_bjdong("41111")[:2]]
     at.multiselect(key="home-dongs-41111").set_value(two).run()
     assert at.session_state["region"]["dongs"] == two
-    next(b for b in at.button if b.label == "후보 건물 찾기 →").click().run()
+    at.button(key="home-start").click().run()
     assert not at.exception and at.session_state["stage"] == "work"
     assert at.selectbox(key="sb-gu").value == "장안구" and len(at.multiselect(key="sb-dongs-41111").value) == 2
 
@@ -164,7 +175,7 @@ def test_letters_and_map_sections_use_session_result(fakes):
 
 def test_work_sections_have_no_notice_tab(fakes):
     at = open_work()
-    assert at.segmented_control[0].options == ["① 지역 일괄 대조", "② 안내문 및 결과 리포트", "③ 지도"]
+    assert at.segmented_control[0].options == ["① 지역 일괄 대조", "② 지도", "③ 안내문 및 결과 리포트"]
     assert at.segmented_control[0].value == "region"
 
 
@@ -226,7 +237,7 @@ def _merged_result(url: str, sgg: str = "11110"):
     return nh.HuntResult("search", candidates=[cand], auto=nh.AutoExtract(sources=[src], merged=merged))
 
 
-def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
+def test_home_auto_hunt_extracts_and_applies(fakes, notice_dir, monkeypatch):
     """구를 고르면 공고를 찾아 바로 추출: 위에 인터넷 주소, 읍·면·동 전체 적용, 작업 화면 사이드바 공고에 초안."""
     from core import notice_hunter as nh
 
@@ -245,7 +256,13 @@ def test_home_auto_hunt_extracts_and_applies(fakes, monkeypatch):
     assert url in top
     assert at.checkbox(key="home-all-11110").value is True  # 공고 지역 → 동 전체
     assert any("추출한 공고 조건" in m.value for m in at.markdown)
-    next(b for b in at.button if b.label == "후보 건물 찾기 →").click().run()
+    assert at.button(key="home-start").disabled is True  # ② 검수 전에는 ③ 후보 건물 찾기 잠김
+    assert any("검수 필요" in e.label for e in at.expander)
+    next(b for b in at.button if b.label == "검수 완료로 저장").click().run()
+    assert not at.exception
+    assert (notice_dir / "auto-notice.json").exists()
+    assert at.button(key="home-start").disabled is False
+    at.button(key="home-start").click().run()
     assert not at.exception
     assert at.selectbox(key="notice-11110-False").value == "auto-notice"
     assert seen == ["11110"]  # 작업 화면에서도 다시 찾지 않음
@@ -268,9 +285,34 @@ def test_uploaded_draft_is_not_overwritten_by_auto_search(fakes, monkeypatch):
     at.session_state["region"] = {"sgg": "11110", "all": True, "dongs": [], "v": 3}
     at.run()
     assert any("추출한 공고 조건" in m.value for m in at.markdown)
-    assert next(b for b in at.button if b.label == "후보 건물 찾기 →").disabled is False
+    assert at.button(key="home-start").disabled is True  # 검수 전에는 잠김
     at.button(key="home-pick-region").click().run()
     assert not at.exception and calls == []  # 고르기만 해서는 검색하지 않음
     at.button(key="home-search").click().run()
     assert not at.exception and calls == [None]  # LLM 추출 없이 검색만
     assert at.session_state["draft"]["notice"].notice_id == "uploaded"
+
+
+def test_upload_review_then_start(fakes, notice_dir):
+    """공고 업로드 → 추출(초안) → ② 검수 저장 → ③ 후보 건물 찾기 순서. 새 초안이 오면 다시 잠긴다."""
+    from core.conditions import NoticeConditions
+
+    n = NoticeConditions(notice_id="uploaded-review", local_gov="서울특별시 종로구", sigungu_codes=["11110"], min_years=30)
+    draft = {"origin": "upload", "notice": n, "issues": [], "classify": {"repair": False}, "provider": "mock:mock", "usage": "", "region": ""}
+    at = open_home("upload")
+    at.session_state["draft"] = draft
+    at.session_state["region"] = {"sgg": "11110", "all": True, "dongs": [], "v": 3}
+    at.run()
+    start = at.button(key="home-start")
+    assert start.disabled is True
+    assert any("검수 완료로 저장" in c.value for c in at.caption)  # 왜 잠겼는지 안내
+    next(b for b in at.button if b.label == "검수 완료로 저장").click().run()
+    assert not at.exception
+    assert "draft" not in at.session_state
+    assert at.button(key="home-start").disabled is False  # 저장 뒤에도 버튼이 남고 열린다
+    at.run()
+    assert any("검수 완료" in s.value for s in at.success)
+    at.session_state["draft"] = dict(draft, notice=n.model_copy(update={"notice_id": "second"}))
+    at.session_state["reviewed"] = None
+    at.run()
+    assert at.button(key="home-start").disabled is True
