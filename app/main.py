@@ -22,11 +22,8 @@ import streamlit as st  # noqa: E402
 
 from app import home, map_view, motion, sidebar, state, tab_letters, tab_region  # noqa: E402
 
-SECTIONS = {
-    "region": "지역 일괄 대조",
-    "map": "지도",
-    "letters": "안내문·결과 리포트",
-}
+SECTIONS = {"region": "지역 일괄 대조", "map": "지도"}  # ② 안의 두 화면. ③ 안내문은 위 단계 표시줄에서 간다
+SCREENS = (*SECTIONS, "letters")
 
 st.set_page_config(page_title="노후건축물 안전점검 대상 선별", layout="wide")
 state.load_secrets_into_env()
@@ -43,14 +40,22 @@ def work() -> None:
             st.session_state["stage"] = "home"
             st.rerun()
         return
-    st.markdown(f"### {ctx.region_label}")
-    motion.step_bar(st.session_state.get("section") or "region", scope="section")
-    if st.session_state.get("section") not in SECTIONS:  # 공고 분석·조건 편집은 처음 화면에서 한다
-        st.session_state.pop("section", None)
-    kwargs = {} if "section" in st.session_state else {"default": "region"}
-    section = st.segmented_control(
-        "화면", list(SECTIONS), format_func=SECTIONS.get, key="section", label_visibility="collapsed", **kwargs
-    ) or "region"
+    motion.region_heading(ctx.region_label, ctx.dong_label)
+    ss = st.session_state
+    if ss.get("screen") not in SCREENS:
+        ss["screen"] = "region"
+    motion.step_bar(ss["screen"], nav={
+        1: lambda: ss.update(stage="home"),
+        2: lambda: ss.update(screen=ss.get("sub", "region")),
+        3: lambda: ss.update(screen="letters"),
+    })
+    section = ss["screen"]
+    if section != "letters":
+        st.segmented_control(  # 고르면 다시 그리기 전에 screen을 바꾼다(위 단계 표시줄도 같은 값으로 그려지게)
+            "화면", list(SECTIONS), format_func=SECTIONS.get, key="section-pick", default=section,
+            label_visibility="collapsed", on_change=lambda: ss.update(screen=ss.get("section-pick") or ss["screen"]),
+        )
+        ss["sub"] = section
     with motion.view(section, scope="section"):  # 화면 사이를 옮기면 진행 방향으로 들어온다
         if section == "region":
             tab_region.render(ctx)

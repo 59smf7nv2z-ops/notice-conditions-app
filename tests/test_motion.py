@@ -24,5 +24,14 @@ def test_sections_are_tracked_apart_from_stage(monkeypatch):
     assert ss[motion._KEY]["stage"]["view"] == "work"
 
 
+def test_steps_track_by_number(monkeypatch):
+    ss: dict = {}
+    monkeypatch.setattr(motion.st, "session_state", ss)
+    assert motion._track("steps", 2, rank=int) == ("none", 0)
+    assert motion._track("steps", 2, rank=int) == ("none", 0)  # 지역 일괄 대조 ↔ 지도: 같은 단계라 그대로
+    assert motion._track("steps", 3, rank=int) == ("fwd", 1)
+    assert motion._track("steps", 1, rank=int) == ("back", 2)
+
+
 def test_step_of_matches_step_bar():
     assert [motion.STEP_OF[v] for v in ("home", "region", "map", "letters")] == [1, 2, 2, 3]

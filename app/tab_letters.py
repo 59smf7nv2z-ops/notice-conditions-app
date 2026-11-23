@@ -1,4 +1,4 @@
-"""탭3 안내문 및 결과 리포트."""
+"""③ 안내문."""
 
 from __future__ import annotations
 
@@ -20,11 +20,12 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     if res is None or res.df.empty:
         st.info("'지역 일괄 대조' 화면에서 먼저 '조회·판정'을 누르세요.")
         return
-    try:
-        letters.ensure_can_generate(ctx.notice, ctx.eval_date)
-    except letters.LetterBlockedError as e:
-        st.warning(str(e) + " (다음 공고 대비 참고용 결과입니다)")
-        return
+    closed = letters.closed_line(ctx.notice, ctx.eval_date)
+    if closed:
+        st.warning(
+            f"접수가 마감된 공고입니다(마감 {ctx.notice.apply_end}). 안내문은 만들 수 있으며, "
+            "안내문마다 맨 위에 마감된 공고라고 적습니다."
+        )
     if ctx.notice is None:
         st.info("공고가 없어 접수기간·신청방법 등은 '(공고 확인 필요)'로 표시됩니다.")
     if ctx.test_mode:
@@ -80,7 +81,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
     if chosen.empty:
         st.info("발송할 건물을 하나 이상 고르세요.")
         return
-    preview = letters.fill(template, chosen.iloc[0].to_dict(), ctx.notice)
+    preview = letters.fill(template, chosen.iloc[0].to_dict(), ctx.notice, ctx.eval_date)
     st.markdown("**1건 미리보기**")
     st.text(preview)
     if tone == "sms":
@@ -90,12 +91,13 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
 
     c1, c2 = st.columns(2)
     picked = chosen.copy()
-    notice = ctx.notice
+    notice, today = ctx.notice, ctx.eval_date
+    tag = "_마감공고" if closed else ""
     # 파일은 버튼을 누를 때만 만든다(수백 건 docx를 매번 다시 만들지 않도록). 디스크에는 쓰지 않는다.
     c1.download_button(
         f"안내문 docx ({len(chosen)}건, 건물별 페이지)",
-        lambda: letters.letters_docx(picked, template, notice),
-        file_name=f"{ctx.sigungu_name}_{ctx.eval_date.strftime('%Y%m%d')}_안내문_{letters.TONES[tone]}.docx",
+        lambda: letters.letters_docx(picked, template, notice, today),
+        file_name=f"{ctx.sigungu_name}_{ctx.eval_date.strftime('%Y%m%d')}_안내문_{letters.TONES[tone]}{tag}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         on_click="ignore",
     )

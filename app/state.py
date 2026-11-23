@@ -74,3 +74,14 @@ class Ctx:
     @property
     def region_label(self) -> str:
         return f"{self.sido} {self.sigungu_name}".replace(f"{self.sido} {self.sido}", self.sido)
+
+    @property
+    def dong_label(self) -> str:
+        """사이드바에서 고른 읍·면·동. 전체면 '모든 동'(읍·면이 있으면 '모든 읍·면·동'), 셋 이상이면 'OO동 외 N곳'."""
+        if self.all_selected:
+            rural = any(n.endswith(("읍", "면")) for n in self.bjdong_names.values())
+            return "모든 읍·면·동" if rural else "모든 동"
+        names = [self.bjdong_names.get(b, b) for b in self.bjdong_cds]
+        if not names:
+            return ""
+        return "·".join(names) if len(names) <= 2 else f"{names[0]} 외 {len(names) - 1}곳"

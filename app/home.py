@@ -27,7 +27,7 @@ HERO = """
 
 def _go(section: str) -> None:
     st.session_state["stage"] = "work"
-    st.session_state["section"] = section
+    st.session_state["screen"] = section
     st.rerun()
 
 

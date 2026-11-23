@@ -2,11 +2,13 @@
 
 - 단계 화면은 view(): 화면이 바뀔 때만 새 컨테이너(키에 화면·방향)로 그려져, 앞으로 가면 오른쪽에서, 뒤로 가면 왼쪽에서 들어온다.
   같은 화면에서 다시 그릴 때(버튼·입력)는 키가 같아 움직이지 않는다.
-- 단계 표시줄 step_bar(): 지금 단계를 표시(aria-current="step"). 단계가 바뀌면 새 칸이 진행 방향으로 채워진다.
+- 단계 표시줄 step_bar(): 단계 버튼. 누르면 그 단계로 가고(갈 수 없는 단계는 꺼 둠), 단계가 바뀌면 새 칸이 진행 방향으로 채워진다.
 - 움직임 줄이기 설정이면 이동 없이 투명도만 바꾼다(바뀐 사실은 그대로 보인다).
 """
 
 from __future__ import annotations
+
+import html
 
 import streamlit as st
 
@@ -34,18 +36,28 @@ CSS = """
 [class*="st-key-view-"][class*="-back-"] { animation: view-back var(--m-view) var(--m-ease) backwards; }
 [class*="st-key-view-"][class*="-none-"] { animation: view-fade 200ms ease-out backwards; }
 
-/* ── 단계 표시줄 ───────────────────────────────────────────────────── */
-.stepbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 14px 0 4px; padding: 0; list-style: none; font-size: .9rem; }
-.stepbar li { display: flex; align-items: center; gap: 8px; }
-.stepbar li + li::before { content: ""; width: 18px; height: 1px; background: currentColor; opacity: .35; }
-.stepbar span { position: relative; overflow: hidden; padding: 4px 12px; border-radius: 999px;
-  border: 1px solid rgba(127,127,127,.35); opacity: .75; }
-.stepbar .done span { opacity: .9; }
-.stepbar [aria-current="step"] span { opacity: 1; font-weight: 600; color: #fff; border-color: var(--step-on); background: var(--step-on); }
+/* ── 단계 표시줄: 누르면 그 단계로 간다. 지금 단계는 채운 알약, 바뀌면 진행 방향으로 채워진다 ── */
+[class*="st-key-stepnav-"] { align-items: center; gap: 6px 8px !important; margin: 14px 0 4px; }
+[class*="st-key-stepnav-"] [class*="st-key-step-"] { width: auto !important; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+[class*="st-key-stepnav-"] [class*="st-key-step-"]:not([class*="st-key-step-1"])::before {
+  content: ""; width: 18px; height: 1px; background: currentColor; opacity: .35; }
+[class*="st-key-stepnav-"] button { border-radius: 999px; min-height: 0; padding: 4px 12px; }
+[class*="st-key-stepnav-"] button p { font-size: .9rem; }
+[class*="st-key-stepnav-"] [class*="-cur"] button p { font-weight: 600; }
 @keyframes step-fill-fwd  { from { clip-path: inset(0 100% 0 0 round 999px); } }
 @keyframes step-fill-back { from { clip-path: inset(0 0 0 100% round 999px); } }
-.stepbar.fwd  [aria-current="step"] span { animation: step-fill-fwd  var(--m-view) var(--m-ease) backwards; }
-.stepbar.back [aria-current="step"] span { animation: step-fill-back var(--m-view) var(--m-ease) backwards; }
+[class*="st-key-stepnav-fwd-"]  [class*="-cur"] button { animation: step-fill-fwd  var(--m-view) var(--m-ease) backwards; }
+[class*="st-key-stepnav-back-"] [class*="-cur"] button { animation: step-fill-back var(--m-view) var(--m-ease) backwards; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* ── 지역 제목: 구 › 동. 동이 바뀌면 동 이름만 왼쪽에서 밀려 들어온다 ──── */
+.crumb-sep { margin: 0 .1em; opacity: .4; font-weight: 400; }
+.crumb-dong { display: inline-block; }
+.crumb-dong.none { opacity: .55; font-weight: 400; font-size: .8em; }
+@keyframes crumb-in { from { opacity: 0; transform: translateX(-10px); filter: blur(2px); } }
+@keyframes crumb-sep-in { from { opacity: 0; } }
+[class*="st-key-crumb-"]:not(.st-key-crumb-0) .crumb-dong { animation: crumb-in 320ms var(--m-ease) 60ms backwards; }
+[class*="st-key-crumb-"]:not(.st-key-crumb-0) .crumb-sep { animation: crumb-sep-in 200ms ease-out backwards; }
 
 /* ── 사이드바: 펼치면 내용이 패널을 따라 들어온다 ────────────────────── */
 [data-testid="stSidebar"] { transition-timing-function: var(--m-ease) !important; }
@@ -77,7 +89,8 @@ details > summary [data-testid="stExpanderIcon"] { transition: transform var(--m
 /* ── 움직임 줄이기: 이동은 없애고 투명도 변화만 남긴다 ───────────────── */
 @media (prefers-reduced-motion: reduce) {
   [class*="st-key-view-"] { animation: view-fade 200ms ease-out backwards !important; }
-  .stepbar [aria-current="step"] span { animation: view-fade 200ms ease-out backwards !important; }
+  [class*="st-key-stepnav-"] [class*="-cur"] button { animation: view-fade 200ms ease-out backwards !important; }
+  [class*="st-key-crumb-"] .crumb-dong { animation-name: crumb-sep-in !important; }
   [data-testid="stSidebar"][data-collapsed="true"] [data-testid="stSidebarUserContent"] { transform: none; }
   [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { transition-property: opacity; }
   div[data-baseweb="popover"] > div, details[open] > [data-testid="stExpanderDetails"] { animation: view-fade 120ms ease-out backwards; }
@@ -92,14 +105,14 @@ def inject() -> None:
     st.markdown(CSS.replace("__PRIMARY__", primary), unsafe_allow_html=True)
 
 
-def _track(scope: str, view: str) -> tuple[str, int]:
+def _track(scope: str, view, rank=ORDER.get) -> tuple[str, int]:
     """(방향, 전환 번호). 화면이 바뀔 때만 방향을 새로 정하고 번호를 올린다(같은 화면에서 다시 그려도 그대로)."""
     allv = st.session_state.setdefault(_KEY, {})
     last = allv.get(scope)
     if last is None:
         allv[scope] = {"view": view, "dir": "none", "n": 0}
     elif last["view"] != view:
-        d = "fwd" if ORDER.get(view, 0) > ORDER.get(last["view"], 0) else "back"
+        d = "fwd" if (rank(view) or 0) > (rank(last["view"]) or 0) else "back"
         allv[scope] = {"view": view, "dir": d, "n": last["n"] + 1}
     s = allv[scope]
     return s["dir"], s["n"]
@@ -111,15 +124,39 @@ def view(name: str, scope: str = "stage"):
     return st.container(key=f"view-{scope}-{name}-{d}-{n}")
 
 
-def step_bar(view_name: str, scope: str = "stage") -> None:
-    """① 지역·공고 조건 → ② 후보 목록·지도 → ③ 안내문 중 지금 단계."""
+def step_bar(view_name: str, nav: dict | None = None) -> None:
+    """① 지역·공고 조건 → ② 후보 목록·지도 → ③ 안내문. nav={단계 번호: 누르면 부를 함수}, 없는 단계는 꺼 둔다.
+    단계 번호가 바뀔 때만 다시 채워진다(② 안에서 지역 일괄 대조 ↔ 지도는 그대로)."""
     cur = STEP_OF.get(view_name, 1)
-    d = (st.session_state.get(_KEY, {}).get(scope) or {}).get("dir", "none")
-    items = []
-    for i, label in enumerate(STEPS, 1):
-        if i == cur:
-            items.append(f'<li aria-current="step"><span>{i} {label}</span></li>')
-        else:
-            cls = ' class="done"' if i < cur else ""
-            items.append(f'<li{cls}><span>{i} {label}</span></li>')
-    st.markdown(f'<ol class="stepbar {d}" aria-label="진행 단계">{"".join(items)}</ol>', unsafe_allow_html=True)
+    d, n = _track("steps", cur, rank=int)
+    nav = nav or {}
+    st.markdown(f'<p class="sr-only">지금 단계: {cur} {STEPS[cur - 1]}</p>', unsafe_allow_html=True)
+    with st.container(horizontal=True, key=f"stepnav-{d}-{n}"):
+        for i, label in enumerate(STEPS, 1):
+            here = i == cur
+            st.button(
+                f"{i} {label}",
+                key=f"step-{i}-cur" if here else f"step-{i}",
+                type="primary" if here else "secondary",
+                on_click=None if here else nav.get(i),
+                disabled=not here and i not in nav,
+            )
+
+
+def region_heading(region: str, dong: str) -> None:
+    """'충청북도 청주시 상당구 › 용암동'. 동이 바뀔 때만 새 컨테이너로 그려 동 이름이 다시 들어온다(처음 그릴 때는 움직이지 않음)."""
+    allv = st.session_state.setdefault(_KEY, {})
+    last = allv.get("crumb")
+    if last is None:
+        allv["crumb"] = last = {"label": (region, dong), "n": 0}
+    elif last["label"] != (region, dong):
+        last.update(label=(region, dong), n=last["n"] + 1)
+    shown = html.escape(dong) if dong else "동을 고르세요"
+    cls = "crumb-dong" if dong else "crumb-dong none"
+    with st.container(key=f"crumb-{last['n']}"):
+        st.markdown(
+            f'### {html.escape(region)} <span class="crumb-sep" aria-hidden="true">›</span> '
+            f'<span class="{cls}">{shown}</span>',
+            unsafe_allow_html=True,
+        )
+

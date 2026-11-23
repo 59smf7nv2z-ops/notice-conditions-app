@@ -239,7 +239,7 @@ def render(ctx: Ctx, res: RegionResult | None) -> None:
                 pins.add(pk)
                 st.rerun()
             if pins:
-                st.caption(f"지도에서 고른 안내문 대상 {len(pins)}건 (안내문 화면에서 씀)")
+                st.caption(f"지도에서 고른 안내문 대상 {len(pins)}건 (위 '3 안내문' 단계에서 씀)")
         elif not clicked_emd:
             st.caption("핀을 누르면 건물 상세가, 읍·면·동 경계를 누르면 그 동 정보가 여기에 나옵니다.")
 

@@ -224,10 +224,12 @@ def test_query_judge_and_rerun_without_refetch(fakes):
 
 def test_letters_and_map_sections_use_session_result(fakes):
     at = run_query(open_work())
-    at.segmented_control[0].set_value("letters").run()
-    assert not at.exception
+    at.button(key="step-3").click().run()  # ③ 안내문은 위 단계 표시줄에서
+    assert not at.exception and not at.segmented_control
     assert any("1건 미리보기" in m.value for m in at.markdown)
     assert any("안내문 docx" in d.label for d in at.download_button)
+    at.button(key="step-2").click().run()
+    assert at.segmented_control[0].value == "region"
     at.segmented_control[0].set_value("map").run()
     assert not at.exception
     assert any("지도 좌표 가져오기" in b.label for b in at.button)  # 좌표는 버튼을 눌러야 가져온다
@@ -236,8 +238,9 @@ def test_letters_and_map_sections_use_session_result(fakes):
 
 def test_work_sections_have_no_notice_tab(fakes):
     at = open_work()
-    assert at.segmented_control[0].options == ["지역 일괄 대조", "지도", "안내문·결과 리포트"]
+    assert at.segmented_control[0].options == ["지역 일괄 대조", "지도"]
     assert at.segmented_control[0].value == "region"
+    assert at.button(key="step-2-cur").proto.type == "primary" and not at.button(key="step-3").disabled
 
 
 def test_missing_building_key_shows_error(fakes, monkeypatch):
@@ -378,3 +381,20 @@ def test_upload_review_then_start(fakes, notice_dir):
     at.session_state["reviewed"] = None
     at.run()
     assert at.button(key="home-start").disabled is True
+
+
+def test_heading_shows_gu_and_dong(fakes):
+    at = open_work(all_dongs=True)
+    head = next(m.value for m in at.markdown if m.value.startswith("### "))
+    assert "›" in head and "모든 동" in head and 'class="crumb-dong"' in head
+    n = at.session_state["_motion"]["crumb"]["n"]
+    at.checkbox(key="sb-all-11110").uncheck().run()
+    head = next(m.value for m in at.markdown if m.value.startswith("### "))
+    assert "청운동" in head and at.session_state["_motion"]["crumb"]["n"] == n + 1  # 전체를 풀면 고른 동으로
+
+
+def test_home_step_bar_locks_later_steps():
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.run()
+    assert at.button(key="step-1-cur").proto.type == "primary"
+    assert at.button(key="step-2").disabled and at.button(key="step-3").disabled  # 검수 전에는 못 간다

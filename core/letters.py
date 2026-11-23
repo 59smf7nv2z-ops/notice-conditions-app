@@ -95,7 +95,7 @@ class TemplateError(ValueError):
 
 
 class LetterBlockedError(RuntimeError):
-    """안내문을 만들 수 없는 상태(예: 접수 마감 공고)."""
+    """안내문을 만들 수 없는 상태(예: 비해당 건물)."""
 
 
 # ---------------------------------------------------------------- 틀
@@ -217,12 +217,15 @@ def building_values(row: dict) -> dict[str, str]:
     }
 
 
-def fill(template: str, row: dict, notice: NoticeConditions | None) -> str:
+def fill(template: str, row: dict, notice: NoticeConditions | None, today: date | None = None) -> str:
+    """today를 주면 접수가 마감된 공고일 때 맨 위에 마감 사실을 적는다(closed_line)."""
     status = row.get("status")
     if status not in STATUS_PHRASE:
         raise LetterBlockedError("안내문은 1차 후보·확인필요 건물만 만듭니다.")
     values = notice_values(notice) | building_values(row) | {STATUS_PLACEHOLDER: STATUS_PHRASE[status]}
-    return _PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), m.group(0)), template)
+    text = _PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), m.group(0)), template)
+    closed = closed_line(notice, today) if today else None
+    return f"{closed}\n\n{text}" if closed else text
 
 
 def recipient(row: dict) -> str:
@@ -238,15 +241,17 @@ def sms_kind(text: str) -> str:
     return "SMS" if sms_bytes(text) <= SMS_LIMIT_BYTES else "LMS"
 
 
-def ensure_can_generate(notice: NoticeConditions | None, today: date) -> None:
+def closed_line(notice: NoticeConditions | None, today: date) -> str | None:
+    """접수가 마감된 공고면 안내문 맨 위에 넣을 문장. 마감 공고로도 안내문은 만들 수 있고, 마감 사실을 다시 적는다."""
     if notice is not None and notice.is_expired(today):
-        raise LetterBlockedError(f"접수가 마감된 공고(마감 {notice.apply_end})라 안내문을 만들 수 없습니다.")
+        return f"※ 접수가 마감된 공고(마감 {notice.apply_end})를 기준으로 만든 안내문입니다."
+    return None
 
 
 # ---------------------------------------------------------------- 파일 (메모리에서만)
 
 
-def letters_docx(rows: pd.DataFrame, template: str, notice: NoticeConditions | None) -> bytes:
+def letters_docx(rows: pd.DataFrame, template: str, notice: NoticeConditions | None, today: date | None = None) -> bytes:
     """건물별 한 쪽씩(페이지 나눔) 안내문 docx."""
     doc = Document()
     style = doc.styles["Normal"]
@@ -255,7 +260,7 @@ def letters_docx(rows: pd.DataFrame, template: str, notice: NoticeConditions | N
     style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
     records = rows.to_dict("records")
     for i, row in enumerate(records):
-        for line in fill(template, row, notice).splitlines():
+        for line in fill(template, row, notice, today).splitlines():
             doc.add_paragraph(line)
         if i < len(records) - 1:
             doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)

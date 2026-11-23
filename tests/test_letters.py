@@ -67,10 +67,14 @@ def test_only_candidate_or_needs_check():
         L.fill(L.make_template(NOTICE, "sms"), row("NOT_ELIGIBLE"), NOTICE)
 
 
-def test_expired_notice_blocks_generation():
-    L.ensure_can_generate(NOTICE, date(2026, 7, 31))
-    with pytest.raises(L.LetterBlockedError):
-        L.ensure_can_generate(NOTICE, date(2026, 8, 1))
+def test_expired_notice_still_generates_with_closed_line():
+    tpl = L.make_template(NOTICE, "elder")
+    assert L.closed_line(NOTICE, date(2026, 7, 31)) is None  # 마감일 당일은 접수 중
+    open_text = L.fill(tpl, row(), NOTICE, date(2026, 7, 31))
+    closed = L.fill(tpl, row(), NOTICE, date(2026, 8, 1))
+    assert "마감된 공고" not in open_text
+    assert closed.splitlines()[0] == L.closed_line(NOTICE, date(2026, 8, 1)) and "마감 2026-07-31" in closed
+    assert closed.endswith(open_text)
 
 
 def test_sms_bytes():
